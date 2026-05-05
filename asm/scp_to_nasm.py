@@ -173,6 +173,58 @@ _RE_PUSH_POP_MEM = re.compile(
     re.IGNORECASE,
 )
 
+# R16: SCP `CALL <offset>, <segment>` and `JMP <offset>, <segment>`
+# are far-call/jmp with offset first, then segment. NASM: `call far
+# <segment>:<offset>`.
+_RE_FAR_CALLJMP = re.compile(
+    r'^(?P<lead>\s*)(?P<op>CALL|JMP)\s+(?P<offset>[A-Za-z_][\w]*)\s*,\s*'
+    r'(?P<seg>[A-Za-z_][\w]*)\s*(?P<comment>;.*)?$',
+    re.IGNORECASE,
+)
+
+# R17: SCP `JMP L, [mem]` is far indirect jump (`L` = long).
+_RE_JMP_L_INDIRECT = re.compile(
+    r'^(?P<lead>\s*)JMP\s+L\s*,\s*(?P<rest>\[[^]]+\])\s*(?P<comment>;.*)?$',
+    re.IGNORECASE,
+)
+
+# R18: SCP `MOV [mem], imm` with no explicit size hint. SCP defaulted
+# to word; NASM requires the size. We add `word` only when the source
+# is a literal/identifier (not a register, which already disambiguates).
+_RE_MOV_MEM_IMM = re.compile(
+    r'^(?P<lead>\s*)MOV\s+(?P<mem>\[[^]]+\])\s*,\s*(?P<src>[^;]+?)\s*(?P<comment>;.*)?$',
+    re.IGNORECASE,
+)
+
+# R19: JCXZ has no inverse mnemonic; expand `JCXZ RET` specially.
+_RE_JCXZ_RET = re.compile(
+    r'^(?P<lead>\s*)JCXZ\s+RET\b\s*(?P<comment>;.*)?$',
+    re.IGNORECASE,
+)
+
+# R20: SCP `RET L` → NASM `retf` (far return).
+_RE_RET_L = re.compile(
+    r'^(?P<lead>\s*)RET\s+L\s*(?P<comment>;.*)?$',
+    re.IGNORECASE,
+)
+
+# R21: `INC [mem]` / `DEC [mem]` (no size) → add `word`.
+_RE_INCDEC_MEM = re.compile(
+    r'^(?P<lead>\s*)(?P<op>INC|DEC)\s+(?P<rest>\[[^]]+\])\s*(?P<comment>;.*)?$',
+    re.IGNORECASE,
+)
+
+# R22: `CMP [mem], imm` (no register operand) → add `word`.
+_RE_CMP_MEM_IMM = re.compile(
+    r'^(?P<lead>\s*)CMP\s+(?P<mem>\[[^]]+\])\s*,\s*(?P<src>[^;]+?)\s*(?P<comment>;.*)?$',
+    re.IGNORECASE,
+)
+
+# Registers that disambiguate operand size on their own.
+_BYTE_REGS = {'AL', 'BL', 'CL', 'DL', 'AH', 'BH', 'CH', 'DH'}
+_WORD_REGS = {'AX', 'BX', 'CX', 'DX', 'SI', 'DI', 'BP', 'SP',
+              'CS', 'DS', 'ES', 'SS'}
+
 _RE_ALIGN = re.compile(
     r'^(?P<lead>\s*)ALIGN\s*(?P<comment>;.*)?$',
     re.IGNORECASE,
@@ -373,6 +425,83 @@ def translate(lines):
             comment = m.group('comment') or ''
             out.append(f"{m.group('lead')}{op} word {rest}{('  ' + comment) if comment else ''}\n")
             continue
+
+        # R17: JMP L, [mem] — far indirect jump.
+        m = _RE_JMP_L_INDIRECT.match(line)
+        if m:
+            comment = m.group('comment') or ''
+            out.append(f"{m.group('lead')}jmp far {m.group('rest')}{('  ' + comment) if comment else ''}\n")
+            continue
+
+        # R16: SCP `CALL/JMP <offset>, <segment>` → NASM `call/jmp
+        # <segment>:<offset>`. NASM auto-detects the far form when the
+        # operand uses colon syntax with two immediate values.
+        m = _RE_FAR_CALLJMP.match(line)
+        if m:
+            op = m.group('op').lower()
+            seg = m.group('seg')
+            offset = m.group('offset')
+            comment = m.group('comment') or ''
+            out.append(f"{m.group('lead')}{op} {seg}:{offset}{('  ' + comment) if comment else ''}\n")
+            continue
+
+        # R19: JCXZ RET — JCXZ has no inverse; emit a 2-step skip.
+        m = _RE_JCXZ_RET.match(line)
+        if m:
+            label_done = f".scp_jcxz_done_{jcc_ret_counter:03d}"
+            label_ret  = f".scp_jcxz_ret_{jcc_ret_counter:03d}"
+            jcc_ret_counter += 1
+            comment = m.group('comment') or ''
+            out.append(f"{m.group('lead')}jcxz {label_ret}\n")
+            out.append(f"\tjmp {label_done}\n")
+            out.append(f"{label_ret}:\n")
+            out.append(f"\tret\n")
+            out.append(f"{label_done}:{('  ' + comment) if comment else ''}\n")
+            continue
+
+        # R18: `MOV [mem], imm` with no size and a non-register source.
+        # SCP defaulted to word. We only add the size hint if the source
+        # is not a register (registers already disambiguate the size).
+        m = _RE_MOV_MEM_IMM.match(line)
+        if m:
+            src = m.group('src').strip()
+            src_upper = src.upper()
+            # If the source is a register name, NASM can size from the
+            # register; pass the line through unchanged.
+            if src_upper not in _BYTE_REGS and src_upper not in _WORD_REGS:
+                mem = m.group('mem')
+                comment = m.group('comment') or ''
+                out.append(f"{m.group('lead')}mov word {mem}, {src}{('  ' + comment) if comment else ''}\n")
+                continue
+            # Else fall through to default pass-through.
+
+        # R20: SCP `RET L` → NASM `retf` (far return).
+        m = _RE_RET_L.match(line)
+        if m:
+            comment = m.group('comment') or ''
+            out.append(f"{m.group('lead')}retf{('  ' + comment) if comment else ''}\n")
+            continue
+
+        # R21: INC/DEC of memory, no size → word.
+        m = _RE_INCDEC_MEM.match(line)
+        if m:
+            op = m.group('op').lower()
+            rest = m.group('rest')
+            comment = m.group('comment') or ''
+            out.append(f"{m.group('lead')}{op} word {rest}{('  ' + comment) if comment else ''}\n")
+            continue
+
+        # R22: `CMP [mem], imm` with non-register source → add word.
+        m = _RE_CMP_MEM_IMM.match(line)
+        if m:
+            src = m.group('src').strip()
+            src_upper = src.upper()
+            if src_upper not in _BYTE_REGS and src_upper not in _WORD_REGS:
+                mem = m.group('mem')
+                comment = m.group('comment') or ''
+                out.append(f"{m.group('lead')}cmp word {mem}, {src}{('  ' + comment) if comment else ''}\n")
+                continue
+            # Else fall through.
 
         # R10: standalone ALIGN → align 2.
         m = _RE_ALIGN.match(line)
