@@ -436,6 +436,16 @@ int contsrch(byte **bx_out, byte **si_out, byte *bp)
         if (bx[0] == 0xE5u) {
             goto next_entry;
         }
+        /* End-of-directory terminator: a zero first byte means this entry
+         * (and all that follow) are unused.  The original DOS 1.0 ASM did
+         * not test for this — FORMAT pre-filled directory slots with 0xE5
+         * — but a freshly-zeroed volume image (and DOS 2.0+ convention)
+         * relies on 0x00 acting as end-of-dir.  Without this guard a
+         * wildcard search ('?') matches the all-zero slot and we would
+         * report a phantom file. */
+        if (bx[0] == 0x00u) {
+            return -1;   /* CF set: no more entries */
+        }
 
         /* Compare 11-byte name with NAME1, respecting '?' wildcard */
         {
