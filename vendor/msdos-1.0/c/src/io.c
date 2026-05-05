@@ -333,8 +333,9 @@ static byte io_setnrex(byte *fcb, word ax, word dx)
  * ----------------------------------------------------------------------- */
 byte fn_setdma(byte *seg, word dx)
 {
+    dos->DMABASE = seg;
     dos->DMAADD  = dx;
-    dos->DMASEG  = (word)(uintptr_t)seg;
+    dos->DMASEG  = 0;   /* legacy field, unused on host */
     return 0;
 }
 
@@ -601,7 +602,7 @@ static void io_bufrd(byte *bp)
     {
         word  cx  = dos->BYTCNT1;
         byte *src = dos->BUFFER + dos->BYTSECPOS;
-        byte *dst = (byte *)(uintptr_t)dos->DMAADD + dos->NEXTADD - dos->DMAADD;
+        byte *dst = (dos->DMABASE + dos->DMAADD) + dos->NEXTADD - dos->DMAADD;
         /* NOTE: in the original code ES:[DI] is the DMA segment + NEXTADD.
          * Here we use a flat pointer model.                               */
         memcpy(dst, src, cx);
@@ -623,7 +624,7 @@ static void io_bufwrt(byte *bp)
     {
         word  cx  = dos->BYTCNT1;
         byte *dst = dos->BUFFER + dos->BYTSECPOS;
-        byte *src = (byte *)(uintptr_t)dos->DMAADD + (dos->NEXTADD - dos->BYTCNT1);
+        byte *src = (dos->DMABASE + dos->DMAADD) + (dos->NEXTADD - dos->BYTCNT1);
         memcpy(dst, src, cx);
         dos->DIRTYBUF = 1;
     }
@@ -691,7 +692,7 @@ static void io_optimize(byte *bp, byte *si,
 
         *ax_out      = sectors_still;
         *dx_out      = phys;
-        *bx_ptr_out  = (byte *)(uintptr_t)dos->DMAADD + (dos->NEXTADD - (word)nbytes);
+        *bx_ptr_out  = (dos->DMABASE + dos->DMAADD) + (dos->NEXTADD - (word)nbytes);
         *cx_inout    = cx;
     }
 }
@@ -720,7 +721,7 @@ static void io_setfcb(byte *bp, word *ax_out, word *dx_out, word *cx_out)
             /* Partial last record: zero-fill remainder */
             dos->DSKERR = 3;
             word fill = recsiz - rem;
-            byte *fill_ptr = (byte *)(uintptr_t)dos->DMAADD + bytes_xfr;
+            byte *fill_ptr = (dos->DMABASE + dos->DMAADD) + bytes_xfr;
             memset(fill_ptr, 0, fill);
             records++;   /* count partial record */
         }
@@ -1055,7 +1056,7 @@ static void io_readdev(byte *fcb, byte *bp, byte *si)
     word  fildirblk = FCB_GET_WORD(fcb, FILDIRBLK);
     byte  bl        = (byte)(fildirblk & 0xFF);
     word  cx        = dos->BYTCNT1;
-    byte *di        = (byte *)(uintptr_t)dos->DMAADD;
+    byte *di        = dos->DMABASE + dos->DMAADD;
 
     if (bl == 0) {
         /* CON: read from console buffer */
@@ -1105,7 +1106,7 @@ static void io_wrtdev(byte *fcb, byte *bp, byte *si)
     word fildirblk = FCB_GET_WORD(fcb, FILDIRBLK);
     byte bl = (byte)(fildirblk & 0x7F);
     word cx = dos->BYTCNT1;
-    byte *src = (byte *)(uintptr_t)dos->DMAADD;
+    byte *src = dos->DMABASE + dos->DMAADD;
     word i;
 
     for (i = 0; i < cx; i++) {

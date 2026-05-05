@@ -103,8 +103,9 @@ typedef struct dos_state {
     /* -- Drive / disk state --------------------------------------------- */
     byte  NUMDRV;       /* 3218: number of logical drives                   */
     word  CONTPOS;      /* 3219: continuation position in CONBUF            */
-    word  DMAADD;       /* 3220: user's DMA (disk transfer) address         */
-    word  DMASEG;       /* 3222: segment of DMA address                     */
+    word   DMAADD;      /* 3220: 16-bit offset within DMA buffer (kernel arithmetic) */
+    word   DMASEG;      /* 3222: legacy; unused on host                     */
+    byte  *DMABASE;     /* host pointer to user's DMA buffer (added for host) */
     word  ENDMEM;       /* 3222: first unavailable segment                  */
     word  MAXSEC;       /* 3223: largest sector size seen during init       */
     byte *BUFFER;       /* 3224: pointer to sector buffer                   */

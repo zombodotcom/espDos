@@ -292,7 +292,7 @@ void fn_filesize(byte *fcb)
  * ----------------------------------------------------------------------- */
 static byte savplce(byte *bx, byte *si_v, byte *bp, byte *fcb)
 {
-    byte *dma  = (byte *)(uintptr_t)dos->DMAADD;
+    byte *dma  = dos->DMABASE + dos->DMAADD;
     byte  smalldir = DPB_GET_BYTE(bp, DIRSIZ);
     byte  drvnum   = DPB_GET_BYTE(bp, DRVNUM);
 

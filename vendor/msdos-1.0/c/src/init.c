@@ -499,6 +499,7 @@ void dos_init(bios_vtable_t *bios_table, byte *init_table)
     dos->BUFDRVNO = (byte)-1;    /* -1 = no drive buffered */
     dos->DIRTYBUF = 0;
     dos->DMAADD   = 0x0080;
+    dos->DMABASE  = NULL;       /* caller must call fn_setdma before any I/O */
 
     /* ASM 3473-3484: MEMSCAN -- probe memory to find top of RAM.
      * NOTE: differs from ASM because real-mode probe-write loop cannot be
