@@ -277,7 +277,10 @@ void bufsec(int no_preread, byte *bp,
 
 finbuf:
     dos->TRANS = 1;
-    *di_out    = (byte *)(uintptr_t)dos->NEXTADD;     /* DMA segment assumed flat */
+    /* DEVIATION (host port): bufsec/bufrd/bufwrt are dead-but-linked here
+     * (live versions are in io.c).  Mirror io.c's DMABASE+offset pattern so
+     * if these ever go live they don't trip the same DMA-truncation bug. */
+    *di_out    = dos->DMABASE + dos->NEXTADD;
     *cx_out    = dos->BYTCNT1;
     dos->NEXTADD = (word)(dos->NEXTADD + dos->BYTCNT1);
     *si_out    = buf + dos->BYTSECPOS;

@@ -203,6 +203,8 @@ byte fn_dskreset(void)
      *   MOV [CURDRVPT],AX   ; reset current drive to drive 0
      */
     dos->DMAADD   = 0x0080;   /* default DMA offset */
+    dos->DMABASE  = NULL;     /* invariant matches dos_init: caller must
+                                 fn_setdma before any successful I/O */
     /* DMASEG unchanged -- in C we have no DS register to save */
     dos->CURDRVPT = dos->DRVTAB[0];
 
@@ -610,9 +612,11 @@ byte dos_dispatch_call(byte func, byte *ds_dx, word ax, word bx, word cx)
     case FN_CURDRV:
         return fn_curdrv();
 
-    /* 26 SETDMA */
+    /* 26 SETDMA — ds_dx is the host-pointer base; the offset within it
+     * is meaningless on a flat host pointer, so pass 0.  Truncating the
+     * pointer to a 16-bit word here would mis-wire DMABASE+DMAADD. */
     case FN_SETDMA:
-        return fn_setdma(ds_dx, (word)(uintptr_t)ds_dx);
+        return fn_setdma(ds_dx, 0);
 
     /* 27 GETFATPT */
     case FN_GETFATPT:
