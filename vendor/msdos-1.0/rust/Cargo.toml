@@ -1,0 +1,21 @@
+[package]
+name = "dos86"
+version = "0.1.0"
+edition = "2021"
+description = "Faithful Rust translation of 86-DOS 1.00 (86DOS.asm) by Tim Paterson"
+
+[lib]
+name = "dos86"
+path = "src/lib.rs"
+
+[[test]]
+name = "test_fat"
+path = "tests/test_fat.rs"
+
+[[test]]
+name = "test_directory"
+path = "tests/test_directory.rs"
+
+[[test]]
+name = "test_io"
+path = "tests/test_io.rs"
