@@ -1,34 +1,68 @@
-# ESP32 MS-DOS 1.0 Port — Design
+# ESP32 MS-DOS 1.0 Port — Design (revised: emulated kernel)
 
-**Date:** 2026-05-04
+**Date:** 2026-05-04 — revised after pivoting away from a translated kernel
 **Status:** Proposed (awaiting user review)
+**Prior attempt:** `archive/plan1-translation-attempt` git tag preserves the
+abandoned approach (jgbarah's C translation) and the kernel-flow bugs that
+killed it.
+
+## Why this revision
+
+The first design tried to run the DOS kernel as native Xtensa code via
+jgbarah's C translation of `86DOS.ASM`. Initial verification surfaced
+multiple translation bugs in core file-I/O paths (`io_store` BYTCNT1 reuse,
+`fat_fndclus` return-discard, `directory.c::contsrch` SI offset). Patching
+them is days of careful ASM-vs-C audit, and the next round of tests
+(delete / rename / filesize) almost certainly hides similar issues.
+
+The pivot: **don't translate the kernel; emulate it.** Take Tim Paterson's
+actual `86DOS.ASM` source from
+`Paterson-Listings/3_source_code/86-DOS_1.00/`, assemble it with a modern
+assembler, and run the resulting 8086 binary on a software 8086 emulator on
+ESP32. The kernel stays byte-identical to what shipped in 1981.
+Translation bugs become impossible by construction.
 
 ## Summary
 
-Port MS-DOS 1.0 to a plain ESP32 (WROOM-32). The DOS kernel runs as native
-Xtensa code via jgbarah's C translation of `86DOS.asm`. Unmodified DOS-1.0-era
-`.COM` programs run on top of it through a small 8086 user-mode emulator that
-traps `INT 21h` into the native kernel. The console is exposed over WiFi to a
-browser-based terminal — no VGA hardware, no PS/2 keyboard.
+A plain ESP32-WROOM-32 boots to a DOS prompt in your browser, running
+unmodified MS-DOS 1.0 source code on a software 8086. All DOS code
+(kernel + a small assembly shell we write + any `.COM` programs) executes
+inside the emulator. The ESP32 provides what the IBM PC's BIOS provided in
+1981: console I/O (routed via WebSocket to an xterm.js terminal page over
+WiFi), disk I/O (routed to a FAT12 image baked into the ESP32's flash), and
+a clock.
 
-Demo target: a user opens a webpage served by the ESP32, types `EDLIN
-HELLO.TXT`, and the actual 1981 `EDLIN.COM` binary edits a file on a FAT12
-filesystem stored in the ESP32's flash.
+### What's novel
+
+Tim Paterson released his original 86-DOS source listings publicly in early
+2025 (`DOS-History/Paterson-Listings`). **Building MS-DOS 1.0 *from* those
+listings — assembling the original 1981 source ourselves, no pre-built
+binary — and running it on a $5 microcontroller with WiFi-served browser as
+I/O** appears to be unprecedented as a documented project. Plenty of
+projects emulate IBM PC hardware and boot pre-built DOS images on ESP32
+(FabGL et al.); none, to our knowledge, build the kernel from these
+listings.
 
 ## Goals
 
-- Boot a working DOS 1.0 environment on plain ESP32-WROOM-32 (no PSRAM)
-- Run unmodified DOS-1.0-era `.COM` binaries against a real FAT12 filesystem
+- Boot the assembled `86DOS.ASM` on plain ESP32-WROOM-32 (no PSRAM)
+- Provide BIOS services (console + disk + clock) such that the kernel boots
+  cleanly to its first transient program — a DOS prompt
 - Browser-based terminal as the user-facing interface (over WiFi)
-- Disk image baked into ESP32 flash (no SD card hardware required)
+- 320 KB FAT12 disk image baked into ESP32 flash
+- A minimal `SHELL.COM` (~100–200 lines of 8086 assembly we write) drives
+  the prompt, parses input, loads and runs other `.COM` files
+- Run at least one period-correct `.COM` (likely `EDLIN`, possibly `DEBUG`)
+  end-to-end
 
 ## Non-goals (v1)
 
-- BASIC / BASICA — depends on IBM PC ROM BASIC and BIOS interrupts beyond INT 21h
-- VGA/HDMI video output, PS/2 or USB keyboard
-- `.EXE` files (DOS 1.0 didn't have them; they came in 2.0)
-- `FORMAT`, `DISKCOPY`, `DISKCOMP` (need block-device hooks we won't expose)
-- Multitasking, networking from inside DOS programs, TSRs
+- BASIC / BASICA (depend on IBM PC ROM BASIC)
+- VGA/HDMI video, PS/2 or USB keyboard
+- `.EXE` files (DOS 2.0+ feature)
+- `FORMAT`, `DISKCOPY`, `DISKCOMP` (need block-device hooks beyond v1)
+- Multitasking, networking from inside DOS, TSRs
+- Captive-portal WiFi provisioning (compile-time creds for v1)
 
 ## Architecture
 
@@ -38,15 +72,12 @@ Two FreeRTOS tasks share two byte ring buffers:
   +--------------------------+         +-------------------------+
   |         net_task         |         |        dos_task         |
   |                          |         |                         |
-  |  WiFi + lwIP             |         |  Native shell           |
-  |  HTTP server (terminal   |         |    └─ EXEC loader       |
-  |     page)                |         |        └─ 8086 emulator |
-  |  WebSocket /tty endpoint |         |            └─ INT 21h   |
-  |                          |         |                dispatch |
-  |                          |         |                 └─ DOS  |
-  |                          |         |                  kernel |
-  |                          |         |                   └─ BIOS|
-  |                          |         |                    vtable|
+  |  WiFi + lwIP             |         |  8086 emulator main     |
+  |  HTTP server (terminal   |         |    loop                 |
+  |     page)                |         |    └─ on far-call to    |
+  |  WebSocket /tty endpoint |         |       BIOSSEG: trap     |
+  |                          |         |       └─ BIOS handler   |
+  |                          |         |          (console/disk) |
   +-----+--------------+-----+         +----+-------------+------+
         |              ^                    |             ^
         v              |                    v             |
@@ -54,206 +85,215 @@ Two FreeRTOS tasks share two byte ring buffers:
 ```
 
 `net_task` is intentionally ignorant of DOS — it shuttles bytes between the
-WebSocket and the two ring buffers. This isolates the WiFi stack from the
-deterministic DOS world.
+WebSocket and the two ring buffers.
 
-Inside `dos_task`, layered top-to-bottom:
+Inside `dos_task`, top-to-bottom:
 
-1. **Native shell** — replaces `COMMAND.COM`. Built-ins: `DIR`, `TYPE`, `COPY`,
-   `REN`, `DEL`, `CLS`, `DATE`, `TIME`. Non-built-ins → EXEC loader.
-2. **EXEC loader** — opens `<name>.COM` via DOS file syscalls, copies bytes
-   into the emulator's user segment at offset `0x100`, builds a minimal
-   Program Segment Prefix (PSP) at `0x000`, sets `CS=DS=ES=SS=user_seg`,
-   `IP=0x100`, `SP=0xFFFE`, runs the emulator until termination.
-3. **8086 emulator** — adapted from Adrian Cable's `8086tiny`. Real-mode,
-   single 64KB segment, no protected mode, no segmentation tricks. The
-   emulator's only "interrupt" path is the INT 20h / INT 21h trap.
-4. **INT 21h dispatcher** — pulls AH/AL/BX/CX/DX/DS/ES out of the emulator
-   state, calls the matching native kernel `fn_*`, writes return values and
-   carry flag back. INT 20h sets a halt flag.
-5. **DOS kernel** — jgbarah's C translation, vendored verbatim under
-   `vendor/msdos-1.0/c/`. Already abstracts the BIOS behind a `bios_vtable_t`.
-6. **BIOS vtable (our impl)** — three concerns: console (routes to ring
-   buffers), disk (routes to flash block device), clock (`esp_timer`).
-7. **Flash block device** — exposes a 1.44 MB partition as 512-byte sectors.
-   Handles ESP32 flash's 4 KB erase granularity with a 1-block RMW cache.
+1. **8086 emulator core** — real-mode 16-bit instruction interpreter.
+   Allocates ~96 KB of 8086 address space (kernel + one user segment +
+   scratch). Adapted from Adrian Cable's `8086tiny`, with built-in
+   IBM-PC-BIOS / VGA / timer / DMA / disk shims stripped or replaced.
+2. **BIOS trap dispatcher** — when the emulator hits a far CALL whose
+   target segment is `BIOSSEG` (0x0040, per `86DOS.asm:130-143`), the
+   dispatcher reads the offset, identifies which BIOS entry the kernel
+   was calling (BIOSSTAT / BIOSIN / BIOSOUT / BIOSPRINT / BIOSAUXIN /
+   BIOSAUXOUT / BIOSREAD / BIOSWRITE / BIOSDSKCHG), pulls AL/BX/CX/DX
+   from the emulator's CPU state, calls the matching ESP32 handler,
+   writes results + carry flag back, simulates RETF.
+3. **BIOS handlers** — three small files: `bios_console.c`,
+   `bios_disk.c`, `bios_clock.c`. Console handlers move bytes to/from the
+   ring buffers; disk handlers call the flash block device.
+4. **Flash block device** — FAT12 partition exposed as 512-byte sectors,
+   with a 4 KB RMW cache for ESP32's erase granularity.
+
+The kernel itself runs *above* all this, unchanged. When user `.COM` code
+hits `INT 21h`, the kernel's own ASM dispatcher handles it inside the
+emulator — we don't intercept that path. We only intercept BIOS far-calls.
 
 ## Components
 
-### `bios_esp32` — BIOS vtable implementation
+### `emulator_8086`
+- Real-mode 8086 instruction interpreter
+- ~96 KB allocated address space (a single contiguous host buffer)
+- Hook: `on_far_call(seg, offset)` — if `seg == BIOSSEG`, dispatch BIOS;
+  else proceed normally
+- State: 14 16-bit registers, flags, the memory buffer
+- Halts on `HLT` or unhandled trap
 
-Implements the nine function pointers `bios_vtable_t` requires:
+### `bios_dispatch`
+- Knows the layout of the BIOS jump-stub area at `BIOSSEG:0` (each entry
+  is 3 bytes; offsets 0/3/6/9/12/15/18/21/24/27 per `86DOS.asm:130-143`)
+- Maps offset → handler via small lookup
+- Handles register-marshalling: read AL/BX/CX/DX from the emulator's
+  CPU state, call C handler, write back AL/AH/CF as the entry's
+  conventions require (see ASM lines 130-143)
 
-- `stat()` — non-zero if input ring has bytes
-- `in()` — read one byte from input ring; yields `dos_task` while empty
-- `out(ch)` — push one byte to output ring
-- `print(ch)` — stub (no printer)
-- `auxin/auxout` — stub
-- `read(drive, buf, count, sector)` / `write(...)` — call into `flash_disk`
-- `dskchg(drive)` — return 1 (not changed); flash is fixed media
+### `bios_console`
+- `bios_stat()` → AL: 0 if input ring empty, non-zero otherwise
+- `bios_in()` → AL: blocks (yields task) until a byte is available
+- `bios_out(ch)` — push AL to output ring
+- `bios_print(ch)` — stub (no printer in v1)
+- `bios_auxin/auxout` — stubs
 
-### `flash_disk` — block device
+### `bios_disk`
+- `bios_read(drive, buf_seg, buf_off, count, sector)` — resolve
+  buf_seg:buf_off into a host pointer into the emulator's memory; call
+  `flash_disk_read`; set/clear carry as success/error
+- `bios_write(...)` — symmetric
+- `bios_dskchg(drive)` — return AH=1 (not changed)
 
-- API: `disk_read(byte *buf, uint32_t sector, uint32_t count)`,
-  `disk_write(...)`. 512-byte sectors.
-- Backed by an ESP32 flash partition named `dos_disk` (custom partition type),
-  sized for a **DOS 1.0 320 KB double-sided floppy**:
-  `SECSIZ=512, SPC=2, FIRFAT=1, FATCNT=2, MAXENT=112, DSKSIZ=640`. This is
-  period-authentic, fits comfortably in flash, and matches geometry the
-  kernel translation has been exercised against.
-- 4 KB-aware: maintains a single 4 KB read-modify-write buffer. Sub-4 KB
-  writes load the parent 4 KB block, modify it, and queue an erase + write
-  on flush or eviction.
-- Mounting: at boot, locate the partition by name.
+### `flash_disk`
+- 320 KB FAT12 partition exposed as 512-byte sectors
+- 4 KB RMW: load the parent 4 KB block, modify, queue erase + write on
+  flush or eviction
 
-### `emulator_8086` — instruction interpreter
+### Kernel binary (`DOS.SYS`)
+- Source: `Paterson-Listings/3_source_code/86-DOS_1.00/86DOS.ASM` —
+  unchanged, in-place
+- Assembled with NASM (or `yasm`) producing a flat binary
+- Likely needs a tiny `kernel.patches` directory of mechanical
+  syntax-only adjustments where SCP-ASM 2.43 conventions don't match
+  NASM. Adjustments must be syntactic only — never logic. Each tagged
+  with `; PATCH (NASM): <reason>` comment for grep
+- Loaded by the emulator at the segment the kernel expects
 
-- Source: adapted from Adrian Cable's `8086tiny` (BSD-licensed, ~25 KB of
-  readable C). Strip its built-in BIOS, VGA, timer, DMA, and disk shims —
-  the only "interrupt" reaching our emulator is INT 21h via DOS programs and
-  INT 20h for termination.
-- State: 14 16-bit registers + 64 KB user segment buffer. We allocate one
-  fixed buffer; `.COM` files use a single segment by definition.
-- Hook: `void on_int(uint8_t vector, cpu_state_t *cpu)`. INT 21h flows to
-  the dispatcher; INT 20h sets a halt flag.
+### `SHELL.COM`
+- Source: `shell/shell.asm` — ~100–200 lines we write
+- Behavior:
+  - Print prompt (`A>`)
+  - `INT 21h AH=0Ah` — buffered line input
+  - Parse first whitespace-separated token as command
+  - Built-ins: `DIR`, `TYPE <name>`, possibly `DEL`, `REN`, `EXIT`
+  - External: open `<cmd>.COM` via FCB, read it via SEQRD into a fresh
+    user segment at offset 0x100, build a minimal PSP at offset 0x00,
+    `JMP FAR` to user_seg:0x100
+  - On user program return (`INT 20h` or `AH=00h`): back to prompt
+- Period-authentic 8.3 filename UX
+- Lives on the disk image as `SHELL.COM`
 
-### `int21_dispatch` — DOS syscall bridge
+### Disk image layout
+- 320 KB FAT12, geometry `SECSIZ=512, SPC=2, FIRFAT=1, FATCNT=2,
+  MAXENT=112, DSKSIZ=640`, media descriptor 0xFF (DOS 1.0 5.25" DS)
+- Sector 0: boot sector (zero — emulator loads kernel directly into RAM,
+  not via boot sector)
+- Sectors 1–4: FATs
+- Sectors 5–11: root directory
+- Data: contains `SHELL.COM`, optionally `EDLIN.COM` / `DEBUG.COM`, user
+  files
 
-- `void dispatch(cpu_state_t *cpu)` reads AH from the cpu state, switches on
-  it, calls the matching kernel `fn_*` with arguments translated from the
-  appropriate registers and segment+offset pairs into native pointers
-  (offsets are relative to the emulator's user segment buffer).
-- Writes return values back: AL / carry flag / DX / BX as appropriate per
-  DOS 1.0 conventions.
-- DOS 1.0 syscall set is small (~40 functions); roughly 200 lines of switch
-  + register marshalling.
+### Disk image authoring
+- Small Python helper (`tools/build_disk.py`) takes a directory of files,
+  builds a 320 KB FAT12 image with the geometry above, writes to
+  `disk.img`. Flashed to the `dos_disk` partition via
+  `esptool.py write_flash <offset> disk.img`.
 
-### `native_shell` — replaces COMMAND.COM
+## Boot sequence
 
-- Single line-input loop. Reads via DOS `FN_BUFIN`, parses, dispatches.
-- Built-ins (`DIR`, `TYPE`, `COPY`, etc.) call the kernel directly — no
-  emulator round-trip for trivial commands.
-- Non-built-in: try `<cmd>.COM` on current drive via EXEC loader; on
-  failure, "Bad command or file name."
-
-### `web_terminal` — browser front end
-
-- Static asset: one HTML file with `xterm.js` (bundled into firmware).
-- Browser opens WebSocket to `ws://<esp32-ip>/tty`; raw bytes both
-  directions.
-- Server: ESP-IDF's built-in `esp_http_server` + `httpd_ws_*` APIs.
-
-### `provisioning` — WiFi credentials
-
-- v1: WiFi credentials compiled into firmware via `idf.py menuconfig`
-  (`CONFIG_WIFI_SSID` / `CONFIG_WIFI_PASS`).
-- Captive-portal fallback for unconfigured devices is deferred to v2.
-
-## Data flow: typical command
-
-User types `EDLIN HELLO.TXT\n` in the browser:
-
-1. Browser → WebSocket → `net_task` → input ring buffer
-2. `dos_task` is blocked in `fn_bufin()` → kernel calls `BIOSIN()` →
-   `bios_esp32::in()` → pops from input ring buffer (yields task while empty)
-3. Native shell receives the line → parses → command=`EDLIN`, args=`HELLO.TXT`
-4. Not a built-in → EXEC loader looks up `EDLIN.COM` via kernel file
-   syscalls (`fn_open`, `fn_seqrd` loop, `fn_close`)
-5. Loader copies file bytes into emulator user segment at `0x100`, fills
-   PSP at `0x00` (command tail at offset `0x80`)
-6. Loader sets emulator registers, runs until halt
-7. EDLIN executes 8086 instructions; first INT 21h trap hits dispatcher
-8. Dispatcher reads AH=09h (print string), looks up DS:DX in user segment,
-   calls `fn_conout` for each byte until `$` terminator
-9. Each `fn_conout` → `con_out` → `BIOSOUT` → `bios_esp32::out` → output
-   ring → `net_task` → WebSocket → browser displays characters
-10. Eventually EDLIN does INT 20h or AH=00h → emulator halts → control
-    returns to native shell → prompt printed
+1. ESP32 boots → ESP-IDF init → `net_task` and `dos_task` start
+2. `dos_task`: emulator allocates memory buffer, loads kernel binary at
+   the kernel's expected segment, sets CS:IP to kernel entry point
+3. Emulator runs. Kernel calls `BIOSIN` for date prompt — dispatcher
+   routes to `bios_in` which blocks on input ring; user types date in
+   browser; kernel parses, prints banner, sets `ENDMEM`, then `JMP FAR`
+   to load the first transient program
+4. Kernel transient-loader opens `SHELL.COM` from disk via its own
+   internal FCB plumbing → `BIOSREAD` traps to flash; SHELL.COM is
+   loaded into a user segment at 0x100
+5. Kernel jumps to SHELL.COM, which prints `A>` and waits for input
+6. Steady state: SHELL.COM line-edits via INT 21h → kernel
+   handles INT 21h in-emulator, calling BIOSIN/BIOSOUT for terminal I/O
+   and BIOSREAD/BIOSWRITE for disk
 
 ## Memory budget (plain ESP32, no PSRAM)
 
-Approximate usable DRAM heap after ESP-IDF boot with WiFi: ~280–320 KB.
+Approximate usable DRAM after ESP-IDF + WiFi: ~280–320 KB.
 
-| Component                     | Size        |
-|-------------------------------|-------------|
-| 8086 user segment             | 64 KB       |
-| DOS kernel state + DPBs       | ~6 KB       |
-| Sector buffers (kernel)       | 1 KB        |
-| Directory buffer (kernel)     | 0.5 KB      |
-| FAT cache                     | ~1 KB       |
-| Flash 4 KB RMW buffer         | 4 KB        |
-| Console rings (input+output)  | 4 KB        |
-| WebSocket recv frame          | 8 KB        |
-| `dos_task` stack              | 16 KB       |
-| `net_task` stack              | 8 KB        |
-| WiFi/lwIP runtime             | ~80 KB      |
-| HTTP server + buffers         | ~12 KB      |
-| **Total**                     | **~205 KB** |
+| Component                      | Size       |
+|--------------------------------|------------|
+| 8086 address space (host buf)  | 96 KB      |
+| Emulator state (registers etc) | <1 KB      |
+| Flash 4 KB RMW buffer          | 4 KB       |
+| Console rings (input+output)   | 4 KB       |
+| WebSocket recv frame           | 8 KB       |
+| `dos_task` stack               | 16 KB      |
+| `net_task` stack               | 8 KB       |
+| WiFi/lwIP runtime              | ~80 KB     |
+| HTTP server + buffers          | ~12 KB     |
+| **Total**                      | **~228 KB** |
 
-Leaves ~75–115 KB headroom. Tight but workable. First lever if we overrun:
-shrink WebSocket recv frame.
+Slack: ~50–90 KB. Comfortable for v1.
 
 ## Flash layout (4 MB part)
 
-ESP-IDF default partitions plus our custom one. Exact offsets are computed by
-ESP-IDF from `partitions.csv`; the relevant addition is the `dos_disk` entry:
+| Partition     | Type                      | Size              |
+|---------------|---------------------------|-------------------|
+| bootloader    | (system)                  | ~64 KB            |
+| partition tbl | (system)                  | 4 KB              |
+| nvs           | data                      | 24 KB             |
+| phy_init      | data                      | 4 KB              |
+| factory app   | app                       | up to 1.5 MB      |
+| **dos_disk**  | data (custom subtype)     | 320 KB            |
+| (free)        | —                         | remainder of 4 MB |
 
-| Partition       | Type     | Size              |
-|-----------------|----------|-------------------|
-| bootloader      | (system) | ~64 KB            |
-| partition table | (system) | 4 KB              |
-| nvs             | data     | 24 KB             |
-| phy_init        | data     | 4 KB              |
-| factory app     | app      | up to 1.5 MB      |
-| **dos_disk**    | **data (custom subtype)** | **320 KB (327,680 B)** |
-| (free)          | —        | remainder of 4 MB |
+## Build & validation strategy
 
-Disk image is authored on host. A small Python helper takes a directory of
-files, builds a 320 KB FAT12 image with the geometry our `flash_disk`
-exposes, then flashes it via `esptool.py write_flash <offset> disk.img`.
+Three build targets:
 
-## Build & host validation strategy
+- **`asm/`** — assembles `86DOS.ASM` (+ any kernel patches, if needed) and
+  `shell.asm` to flat binaries with NASM
+- **`host/`** — compiles the 8086 emulator + a stdio BIOS + a file-backed
+  disk image. Iteration target for emulator and BIOS work without
+  flashing. Runs on Windows.
+- **`esp32/`** — ESP-IDF project. Same emulator + BIOS handler sources;
+  different I/O backends (flash, WebSocket).
 
-Two coexisting build targets share the kernel sources:
+The kernel binary is built once and reused across host and ESP32 targets.
 
-- **`host` build** — compiles the kernel + a stdio-backed BIOS vtable +
-  a file-backed disk image. Runs on Windows/Linux. Used for unit tests and
-  for any kernel-touching change. Sub-second feedback loop. Already
-  scaffolded under `host/main.c` and proven to boot the kernel.
-- **`esp32` build** — ESP-IDF project under `esp32/`. Same kernel sources;
-  different BIOS vtable + drivers + WebSocket terminal.
-
-Kernel changes are validated on host before being flashed to ESP32.
-Hardware-touching changes (block device, BIOS implementation, terminal) are
-flashed and tested on device.
+The host target unblocks a critical workflow: getting the kernel to boot
+and execute the date prompt cleanly inside the emulator on Windows BEFORE
+we touch ESP32 toolchain. Once the kernel boots happily on host, ESP32 is
+just plumbing.
 
 ## Risks & open questions
 
-1. **jgbarah's translation may have latent bugs.** The spike confirmed
-   `dos_init()` works; file ops are unverified. *Mitigation:* extend host
-   smoke test to cover create / write / read / dir-walk / delete / rename
-   before relying on the kernel for harder workloads.
-2. **Memory budget assumes WiFi runtime ~80 KB.** Real number could be
-   higher; we measure on first WiFi-enabled build. *Mitigation:* the
-   WebSocket recv frame and the 4 KB RMW buffer are both adjustable.
-3. **`8086tiny` extraction effort is unknown.** We need to confirm we can
-   isolate the instruction decoder from its built-in BIOS shims without
-   leaving a tangle. *Mitigation:* if the extraction is messy, fall back to
-   a minimal hand-rolled user-mode emulator (~2000 lines).
-4. **DOS 1.0 binary availability.** EDLIN, DEBUG, COMP must come from
-   public archives that match this kernel's expectations. The
-   Paterson-Listings repo has the kernel source only, not the utilities.
-   *Mitigation:* identify at least one binary (most likely EDLIN) we can
-   confirm runs to spec before declaring v1 done.
-5. **If the plain-ESP32 budget overruns.** S3 with PSRAM is the documented
-   fallback. We do not retarget proactively; we measure first.
-6. **Date prompt is unconditional at boot.** DOS 1.0 prompts for date every
-   boot; this is authentic but may surprise users. *Mitigation:* document
-   it; v2 may auto-fill via SNTP.
+1. **8086 emulator correctness.** The kernel exercises a substantial
+   fraction of the 8086 ISA. `8086tiny` is well-trodden but compact.
+   *Mitigation:* host target lets us debug emulator vs kernel quickly.
+   If a kernel instruction misbehaves, we can compare against
+   reference emulators (DOSBox source, Fake86) and fix the decoder.
+
+2. **`86DOS.ASM` assembling cleanly with NASM.** The original was written
+   for Tim Paterson's SCP ASM 2.43 (also in the listings repo). Some
+   directives may need syntax tweaks for NASM. *Mitigation:* try NASM
+   first; if too painful, build SCP ASM 2.43 itself (also from the
+   listings) and use it. Either way, kernel logic is not modified.
+
+3. **Kernel `MEMSCAN`.** `dos_init` probes RAM by write-verify-pattern
+   to find the top of memory. If we allocate 96 KB, `MEMSCAN` might
+   walk past the end. *Mitigation:* one-line ASM patch tagged
+   `; PATCH (HOST): cap MEMSCAN at <addr>` if the original walks past
+   our buffer.
+
+4. **Shell completeness.** `SHELL.COM` needs enough COMMAND.COM-shaped
+   behavior to load `.COM` files. Loading involves PSP construction and
+   FAR JMP. Finicky but well-documented.
+
+5. **Period-correct `.COM` binaries.** EDLIN/DEBUG must come from public
+   archives that match DOS 1.0 syscall expectations. Most are widely
+   circulated; verify before relying.
+
+6. **Memory budget assumes WiFi runtime ~80 KB.** Will measure on first
+   WiFi-enabled build.
+
+7. **Re-syncing with upstream Paterson-Listings.** If Tim Paterson updates
+   the listings, we re-pull and reassemble. Our `kernel.patches/` (if
+   any) should hold *only* assembler-syntax changes — never logic — so a
+   re-sync is a straightforward re-apply.
 
 ## Roadmap beyond v1
 
-- WiFi provisioning UI / captive portal
-- Optional SD card support as alternative storage
-- SNTP-driven automatic date/time
-- More DOS utilities verified end-to-end (DEBUG, COMP, custom user `.COM`)
+- WiFi provisioning UI (captive portal)
+- SD card alternative storage
+- SNTP-driven date/time
+- More period-correct utilities verified end-to-end
+- `.EXE` support (would need DOS 2.0+ kernel — separate project)
