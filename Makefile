@@ -29,6 +29,6 @@ test: host_tests.exe
 	./host_tests.exe
 
 clean:
-	rm -f host_smoke.exe
+	rm -f host_smoke.exe host_tests.exe date_input.tmp
 
 .PHONY: all clean test

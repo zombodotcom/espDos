@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "tests.h"
@@ -36,11 +37,13 @@ void reset_kernel_state(void) {
      * and dos_init() begins with memset(dos, 0, sizeof(*dos)). */
     fat12_init_empty_320kb(host_disk_image);
     /* dos_init prints a banner and prompts for date; redirect stdin
-     * to feed it a date and stdout to /dev/null-equivalent so the test
-     * runner output stays clean. We just feed via freopen on stdin. */
-    freopen("date_input.tmp", "r", stdin);
-    /* The caller is responsible for ensuring date_input.tmp exists with
-     * "1-1-81\n". main() in test_kernel.c writes it once at startup. */
+     * to feed it the canned date.  If date_input.tmp is missing,
+     * dos_init's getdat() will spin forever consuming garbage from
+     * an undefined stdin, so we abort loudly instead. */
+    if (!freopen("date_input.tmp", "r", stdin)) {
+        fprintf(stderr, "FATAL: reset_kernel_state cannot open date_input.tmp\n");
+        exit(2);
+    }
     dos_init(&host_bios, host_init_table());
 }
 
