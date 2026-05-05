@@ -40,12 +40,44 @@ If you just cloned this repo, read in this order:
 
 ## Status (as of 2026-05-05)
 
-- Spec written, approved
-- Plan 1 (host kernel boot) written, not yet executed
-- Plan 2 (live source-annotated browser pane on host) sketched in the
-  roadmap doc, not yet expanded into a task plan
-- Plans 3–5 (ESP-IDF port → full hardware demo → SHELL.COM and EDLIN)
-  outlined in the roadmap; specifics deferred until earlier plans land
+**Plan 1 progress: Tasks 1–3 of 8 done.**
+
+- ✅ **Task 1: project skeleton + Makefile** — `Makefile`, `asm/build_kernel.sh`,
+  `host/main.c` placeholder. `mingw32-make` produces `build/kernel.bin`
+  + (eventually) `build/dos_host.exe`.
+- ✅ **Task 2: assemble 86DOS.ASM** — `asm/scp_to_nasm.py` translates SCP-ASM
+  2.43 dialect to NASM (22 mechanical rules; Tim Paterson's source remains
+  read-only). Output: `build/kernel.bin` (5,861 bytes). Banner string
+  "86-DOS" verified at offset 0x1d, "Copyright" at 0x32, first instruction
+  is JMP DOSINIT at offset 0x146d. **The kernel assembles cleanly.**
+- 🟡 **Task 3: vendor 8086tiny** — Adrian Cable's emulator copied to
+  `third_party/8086tiny/` (MIT). Standalone compile fails on modern
+  GCC + headless (uses `kbhit`/`getch` from Windows `<conio.h>`, plus
+  some K&R-style declarations and a struct-init quirk). Adaptation is
+  Task 4's territory.
+- ⏳ **Task 4: emulator adapter + far-call trap** — not started. The
+  vendored 8086tiny needs (a) `<conio.h>` includes for keyboard, (b)
+  modern-GCC fixes for the K&R bits, (c) a `step_one_instruction()`
+  facade extracted from its inline `main()` loop, (d) HLT-as-trap hook
+  to detect CS=BIOSSEG far calls and route into our BIOS handlers.
+- ⏳ **Tasks 5–8**: BIOS dispatch + console + disk handlers; load
+  kernel into emu memory; iterate until banner + date prompt work.
+
+### Hardware
+
+The user has a **LilyGO T-Display-S3** plugged in (broken TFT, but we're
+using browser anyway). The chip is on COM3 at VID:PID `303A:1001`. We
+can't talk to it via esptool without a manual BOOT+RESET, so all
+development is host-only until the user is back at the device. Good
+news: T-Display-S3 has 8MB PSRAM and 16MB flash, so the memory budget
+in the spec (which assumed plain ESP32-WROOM-32) has lots of slack.
+
+### Where to pick up
+
+After cloning and `git pull`:
+1. Check `mingw32-make` produces `build/kernel.bin` (Task 1+2 work)
+2. Adapt `third_party/8086tiny/8086tiny.c` per Task 4 of the plan; the
+   kernel binary is ready to feed into it.
 
 ## Hardware target
 
