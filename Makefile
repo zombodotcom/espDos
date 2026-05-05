@@ -10,13 +10,14 @@ KERNEL_SRCS := \
     $(VENDOR)/src/syscall.c \
     $(VENDOR)/src/init.c
 
-HOST_SRC := host/main.c
+HOST_LIB_SRCS := host/host_bios.c
+SMOKE_SRCS    := host/main.c $(HOST_LIB_SRCS)
 
-CFLAGS := -std=c99 -Wall -I$(VENDOR)/include -g
+CFLAGS := -std=c99 -Wall -I$(VENDOR)/include -Ihost -g
 
 all: host_smoke.exe
 
-host_smoke.exe: $(KERNEL_SRCS) $(HOST_SRC)
+host_smoke.exe: $(KERNEL_SRCS) $(SMOKE_SRCS)
 	gcc $(CFLAGS) $^ -o $@
 
 clean:
