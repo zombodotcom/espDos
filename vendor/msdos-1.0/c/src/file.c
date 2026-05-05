@@ -359,6 +359,15 @@ byte fn_create(byte *fcb)
     for (;;) {
         if (bx[0] == 0xE5u)
             break;   /* FREESPOT: free entry */
+        /* DEVIATION FROM 86DOS.asm:988-992 (LOOKFRE loop):
+         * Original ASM only tested 0xE5 (deleted) because FORMAT pre-filled
+         * unused directory slots with 0xE5.  We additionally treat a 0x00
+         * first byte as a free/unused entry (the DOS 2.0+ convention) so
+         * fn_create succeeds on FAT12 images NOT written by DOS 1.0 FORMAT
+         * (zeroed test images, mkfs.fat output, etc.).  Mirrors the parallel
+         * fix in directory.c::contsrch. */
+        if (bx[0] == 0x00u)
+            break;   /* FREESPOT: never-used entry */
         {
             byte al_sec = 0;
             byte *dx_lim = dos->DIRBUF + DPB_GET_WORD(bp, SECSIZ);
