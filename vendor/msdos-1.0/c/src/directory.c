@@ -436,13 +436,14 @@ int contsrch(byte **bx_out, byte **si_out, byte *bp)
         if (bx[0] == 0xE5u) {
             goto next_entry;
         }
-        /* End-of-directory terminator: a zero first byte means this entry
-         * (and all that follow) are unused.  The original DOS 1.0 ASM did
-         * not test for this — FORMAT pre-filled directory slots with 0xE5
-         * — but a freshly-zeroed volume image (and DOS 2.0+ convention)
-         * relies on 0x00 acting as end-of-dir.  Without this guard a
-         * wildcard search ('?') matches the all-zero slot and we would
-         * report a phantom file. */
+        /* DEVIATION FROM 86DOS.asm:484-515 (CONTSRCH/SRCH loop):
+         * Original ASM only tested 0xE5 (deleted) because FORMAT pre-filled
+         * unused directory slots with 0xE5.  We additionally treat a 0x00
+         * first byte as end-of-directory (the DOS 2.0+ convention) so the
+         * kernel is robust to FAT12 images NOT written by DOS 1.0 FORMAT —
+         * including our zeroed test images, mkfs.fat output, etc.  Without
+         * this guard a wildcard search ('?') matches the all-zero slot and
+         * we report a phantom file. */
         if (bx[0] == 0x00u) {
             return -1;   /* CF set: no more entries */
         }
