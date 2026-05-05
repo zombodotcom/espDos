@@ -14,6 +14,15 @@
 #include <fcntl.h>
 #endif
 
+#ifdef _WIN32
+/* PATCH (MinGW): Windows needs <conio.h> for kbhit/getch, <io.h> for
+ * read/write/open/lseek/close, and <fcntl.h> for O_RDWR/O_BINARY.  The
+ * original source assumed POSIX once `_WIN32` was true, which was wrong. */
+#include <conio.h>
+#include <io.h>
+#include <fcntl.h>
+#endif
+
 #ifndef NO_GRAPHICS
 #include "SDL.h"
 #endif
@@ -673,8 +682,13 @@ int main(int argc, char **argv)
 						CAST(short)mem[SEGREG(REG_ES, REG_BX, 36+)] = ms_clock.millitm;
 					OPCODE 2: // DISK_READ
 					OPCODE_CHAIN 3: // DISK_WRITE
+						/* PATCH (MinGW): the original cast `(int(*)())read` is K&R-era
+						 * (any-args fn pointer) and modern GCC rejects calling such a
+						 * pointer with arguments. Use the actual signature instead. */
 						regs8[REG_AL] = ~lseek(disk[regs8[REG_DL]], CAST(unsigned)regs16[REG_BP] << 9, 0)
-							? ((char)i_data0 == 3 ? (int(*)())write : (int(*)())read)(disk[regs8[REG_DL]], mem + SEGREG(REG_ES, REG_BX,), regs16[REG_AX])
+							? ((char)i_data0 == 3
+							   ? (int(*)(int, const void*, unsigned))write
+							   : (int(*)(int, const void*, unsigned))read)(disk[regs8[REG_DL]], mem + SEGREG(REG_ES, REG_BX,), regs16[REG_AX])
 							: 0;
 				}
 		}

@@ -50,16 +50,28 @@ If you just cloned this repo, read in this order:
   read-only). Output: `build/kernel.bin` (5,861 bytes). Banner string
   "86-DOS" verified at offset 0x1d, "Copyright" at 0x32, first instruction
   is JMP DOSINIT at offset 0x146d. **The kernel assembles cleanly.**
-- 🟡 **Task 3: vendor 8086tiny** — Adrian Cable's emulator copied to
-  `third_party/8086tiny/` (MIT). Standalone compile fails on modern
-  GCC + headless (uses `kbhit`/`getch` from Windows `<conio.h>`, plus
-  some K&R-style declarations and a struct-init quirk). Adaptation is
-  Task 4's territory.
-- ⏳ **Task 4: emulator adapter + far-call trap** — not started. The
-  vendored 8086tiny needs (a) `<conio.h>` includes for keyboard, (b)
-  modern-GCC fixes for the K&R bits, (c) a `step_one_instruction()`
-  facade extracted from its inline `main()` loop, (d) HLT-as-trap hook
-  to detect CS=BIOSSEG far calls and route into our BIOS handlers.
+- ✅ **Task 3: vendor 8086tiny** — Adrian Cable's emulator copied to
+  `third_party/8086tiny/` (MIT). Two `/* PATCH (MinGW): ... */` patches
+  applied so it compiles cleanly under MinGW-w64 GCC 15: (a) include
+  `<conio.h>` and `<io.h>` on `_WIN32` for `kbhit`/`getch`/`open`/etc.,
+  (b) replace one K&R-era function-pointer cast with a properly-typed
+  one. Standalone compile produces `/tmp/8086tiny.o` with no warnings.
+- ⏳ **Task 4: emulator adapter + far-call trap** — not yet wired.
+  Two viable paths from here:
+  1. **Edit 8086tiny.c in place**: replace its `main()` (which boots from
+     a floppy image and uses an external BIOS file) with our own that
+     loads `kernel.bin` at `KERNEL_SEG:0000`, sets CS:IP to that, and
+     adds a per-instruction hook in the existing for-loop to detect
+     `CS == BIOSSEG (0x40)` and dispatch into our BIOS handlers.
+     Pro: keeps the well-tested instruction decoder. Con: invasive edits
+     to vendored source.
+  2. **Write our own minimal emulator**: ~1500–2500 lines of C
+     implementing the 8086 instruction subset 86DOS uses. Cleaner
+     integration; full control. Con: weeks of careful work; risk of
+     ISA bugs that EDLIN/DEBUG would later trip.
+  Recommend path 1 — start by `#ifdef`'ing out 8086tiny's `main()` and
+  adding a `step()` callable that runs one iteration of the existing
+  loop body.
 - ⏳ **Tasks 5–8**: BIOS dispatch + console + disk handlers; load
   kernel into emu memory; iterate until banner + date prompt work.
 
