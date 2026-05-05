@@ -20,7 +20,15 @@ all: host_smoke.exe
 host_smoke.exe: $(KERNEL_SRCS) $(SMOKE_SRCS)
 	gcc $(CFLAGS) $^ -o $@
 
+TEST_SRCS := host/test_kernel.c host/tests.c $(HOST_LIB_SRCS)
+
+host_tests.exe: $(KERNEL_SRCS) $(TEST_SRCS)
+	gcc $(CFLAGS) $^ -o $@
+
+test: host_tests.exe
+	./host_tests.exe
+
 clean:
 	rm -f host_smoke.exe
 
-.PHONY: all clean
+.PHONY: all clean test
