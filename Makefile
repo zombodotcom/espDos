@@ -10,7 +10,7 @@ KERNEL_SRCS := \
     $(VENDOR)/src/syscall.c \
     $(VENDOR)/src/init.c
 
-HOST_LIB_SRCS := host/host_bios.c
+HOST_LIB_SRCS := host/host_bios.c host/fat12_image.c
 SMOKE_SRCS    := host/main.c $(HOST_LIB_SRCS)
 
 CFLAGS := -std=c99 -Wall -I$(VENDOR)/include -Ihost -g
