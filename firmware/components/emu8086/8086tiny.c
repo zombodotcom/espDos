@@ -18,6 +18,7 @@ static inline int ftime(struct timeb *t) { t->millitm = 0; return 0; }
 #include <sys/timeb.h>
 #endif
 
+#include <stdio.h>     /* printf for diagnostic logs (espdos patch) */
 #include <string.h>
 
 #ifdef ESP_PLATFORM

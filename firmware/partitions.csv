@@ -1,0 +1,17 @@
+# Custom partition table for espDos.
+#
+# Layout (16 MB flash):
+#   nvs      : standard NVS, kept for ESP-IDF use
+#   phy_init : standard PHY init data
+#   factory  : 3 MB for the firmware image
+#   dos_disk : 384 KB raw partition holding a FAT12 floppy image.
+#              Sized for a 360 KB DOS floppy (720 sectors × 512 B) plus
+#              padding so the partition lines up to a flash erase
+#              boundary (4 KB). Read/written sector-at-a-time by
+#              bios_read / bios_write via esp_partition_*.
+#
+# Name,    Type, SubType, Offset,   Size,     Flags
+nvs,       data, nvs,     0x9000,   0x6000
+phy_init,  data, phy,     0xf000,   0x1000
+factory,   app,  factory, 0x10000,  0x300000
+dos_disk,  data, fat,     0x310000, 0x60000

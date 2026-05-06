@@ -8,5 +8,13 @@
 extern const uint8_t  kernel_bin_start[] asm("_binary_kernel_bin_start");
 extern const uint8_t  kernel_bin_end[]   asm("_binary_kernel_bin_end");
 
-/* Convenience: byte length of the kernel image. */
+/* Confidence-harness payload — exercises BIOSOUT/BIOSIN/BIOSREAD with
+ * deterministic output. Loaded at KERNEL_SEG:KERNEL_OFFSET (in place
+ * of the real kernel) when ESPDOS_PAYLOAD_HELLO is defined at
+ * compile time. Source: ../asm/hello.asm. */
+extern const uint8_t  hello_bin_start[]  asm("_binary_hello_bin_start");
+extern const uint8_t  hello_bin_end[]    asm("_binary_hello_bin_end");
+
+/* Convenience: byte length of each blob. */
 size_t kernel_blob_size(void);
+size_t hello_blob_size(void);

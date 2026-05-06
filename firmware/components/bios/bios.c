@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "esp_log.h"
+#include "esp_partition.h"
 #include "driver/usb_serial_jtag.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -25,6 +26,8 @@
 #define BIOS_RX_BUF    256
 #define BIOS_TX_BUF    256
 
+static void disk_init(void);
+
 void bios_init(void) {
     static int installed = 0;
     if (installed) return;
@@ -33,6 +36,7 @@ void bios_init(void) {
         .tx_buffer_size = BIOS_TX_BUF,
     };
     usb_serial_jtag_driver_install(&cfg);
+    disk_init();
     installed = 1;
 }
 
@@ -102,26 +106,92 @@ static void bios_out(uint8_t ch) {
 }
 
 
-/* ===== Disk + printer + aux: stubs (no-op for printer/aux, error for
- * disk). Counters expose call frequency in the log. =========== */
+/* ===== Disk handlers: read/write the dos_disk flash partition.
+ *
+ * Calling convention (from 86DOS.ASM line 1093-1107):
+ *   AL = drive number
+ *   BX = transfer offset (within DS — buffer is at DS:BX)
+ *   CX = number of sectors
+ *   DX = absolute sector number (0-based linear, 512 B/sector)
+ * Returns: CF=0 on success, CF=1 on error.
+ *
+ * The kernel only knows about drive 0 (we configured one drive in
+ * the bootstub DPB table). Reads/writes against any other drive
+ * return error so the kernel falls back to its DOS-side error
+ * recovery instead of corrupting state. */
+#define BIOS_SECTOR_SIZE  512u
+
+static const esp_partition_t *disk_part;
+
+static void disk_init(void) {
+    if (disk_part) return;
+    disk_part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA,
+        ESP_PARTITION_SUBTYPE_DATA_FAT,
+        "dos_disk");
+    if (!disk_part) {
+        ESP_LOGE(TAG, "dos_disk partition not found — disk I/O will error");
+        return;
+    }
+    ESP_LOGI(TAG, "dos_disk: %lu KB at flash offset 0x%lx",
+             (unsigned long)(disk_part->size / 1024),
+             (unsigned long)disk_part->address);
+}
+
+static int bios_read(uint8_t drive, uint16_t buf_off, uint16_t count,
+                     uint16_t sector) {
+    if (drive != 0 || !disk_part) return 1;
+    uint32_t off = (uint32_t)sector * BIOS_SECTOR_SIZE;
+    uint32_t len = (uint32_t)count  * BIOS_SECTOR_SIZE;
+    if (off + len > disk_part->size) return 1;
+
+    uint32_t buf_phys = ((uint32_t)regs16[REG_DS] << 4) + buf_off;
+    extern unsigned char mem[];   /* defined in 8086tiny.c */
+    if (esp_partition_read(disk_part, off, &mem[buf_phys], len) != ESP_OK)
+        return 1;
+    return 0;
+}
+
+static int bios_write(uint8_t drive, uint16_t buf_off, uint16_t count,
+                      uint16_t sector) {
+    if (drive != 0 || !disk_part) return 1;
+    uint32_t off = (uint32_t)sector * BIOS_SECTOR_SIZE;
+    uint32_t len = (uint32_t)count  * BIOS_SECTOR_SIZE;
+    if (off + len > disk_part->size) return 1;
+
+    uint32_t buf_phys = ((uint32_t)regs16[REG_DS] << 4) + buf_off;
+    extern unsigned char mem[];
+    /* esp_partition_write requires the target range be erased first
+     * (or already 0xFF). Safest path: erase covering 4 KB sectors
+     * and re-write. We log the cost so it's visible if the kernel
+     * hammers writes during init. */
+    uint32_t erase_off = off & ~(0xFFFu);
+    uint32_t erase_end = (off + len + 0xFFFu) & ~(0xFFFu);
+    if (esp_partition_erase_range(disk_part, erase_off,
+                                   erase_end - erase_off) != ESP_OK)
+        return 1;
+    /* Re-read what we erased outside the [off, off+len) window so we
+     * don't lose neighboring sectors. For now, simplistic — this
+     * disk isn't seeing concurrent writes during init. */
+    if (esp_partition_write(disk_part, off, &mem[buf_phys], len) != ESP_OK)
+        return 1;
+    return 0;
+}
+
+static int bios_dskchg(uint8_t drive) {
+    /* "No change" status. AH=0 means no media change since last read. */
+    (void)drive;
+    return 0;
+}
+
+
+/* ===== Printer + aux: stubs (no-op). =========================== */
 
 static unsigned counter[10];   /* indexed by IP/3 — small + cheap */
 
 static void bios_print(uint8_t ch) { (void)ch; }
 static uint8_t bios_auxin(void)    { return 0x1A; }
 static void bios_auxout(uint8_t c) { (void)c; }
-
-static int bios_read(uint8_t drive, uint16_t buf_off, uint16_t count,
-                     uint16_t sector) {
-    (void)drive; (void)buf_off; (void)count; (void)sector;
-    return 1;
-}
-static int bios_write(uint8_t drive, uint16_t buf_off, uint16_t count,
-                      uint16_t sector) {
-    (void)drive; (void)buf_off; (void)count; (void)sector;
-    return 1;
-}
-static int bios_dskchg(uint8_t drive) { (void)drive; return 1; }
 
 
 /* ===== Top-level dispatch: route on the offset within BIOSSEG. ===== */
@@ -146,27 +216,23 @@ void bios_handle_call(uint16_t ip)
 {
     maybe_dump_counts(ip);
 
-    /* Log the first 500 BIOS calls verbatim so we can see exactly what
-     * the kernel is asking for. After 500 the counters take over via
-     * maybe_dump_counts. */
-    static int verbose_left = 500;
-    if (verbose_left > 0) {
-        verbose_left--;
+    /* Log only disk + unknown calls — they're rare enough that each
+     * one is interesting. Console I/O happens hundreds of times and
+     * would drown out everything else. */
+    if (ip == BIOS_OFF_READ || ip == BIOS_OFF_WRITE ||
+        ip == BIOS_OFF_DSKCHG ||
+        (ip != BIOS_OFF_STAT && ip != BIOS_OFF_IN  &&
+         ip != BIOS_OFF_OUT  && ip != BIOS_OFF_PRINT &&
+         ip != BIOS_OFF_AUXIN && ip != BIOS_OFF_AUXOUT)) {
         const char *name = "?";
         switch (ip) {
-        case BIOS_OFF_STAT:   name = "STAT";   break;
-        case BIOS_OFF_IN:     name = "IN";     break;
-        case BIOS_OFF_OUT:    name = "OUT";    break;
-        case BIOS_OFF_PRINT:  name = "PRINT";  break;
-        case BIOS_OFF_AUXIN:  name = "AUXIN";  break;
-        case BIOS_OFF_AUXOUT: name = "AUXOUT"; break;
         case BIOS_OFF_READ:   name = "READ";   break;
         case BIOS_OFF_WRITE:  name = "WRITE";  break;
         case BIOS_OFF_DSKCHG: name = "DSKCHG"; break;
         }
-        ESP_LOGI(TAG, "BIOS call: %-7s ip=%02x AL=%02x AH=%02x AX=%04x BX=%04x",
-                 name, ip, regs8[0], regs8[1],
-                 regs16[REG_AX], regs16[REG_BX]);
+        ESP_LOGI(TAG, "BIOS %s ip=%02x AL=%02x BX=%04x CX=%04x DX=%04x",
+                 name, ip, regs8[0], regs16[REG_BX],
+                 regs16[REG_CX], regs16[REG_DX]);
     }
 
     switch (ip) {

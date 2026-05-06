@@ -20,3 +20,14 @@ CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 
 # Larger main task stack — emulator-driven workloads may want it.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# 16 MB flash — T-Display-S3 default. Default sdkconfig says 2 MB,
+# which can't hold the 3 MB factory app + dos_disk partition.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+
+# Custom partition table — adds the dos_disk partition that holds the
+# FAT12 floppy image the 86-DOS kernel reads through bios_read/write.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"

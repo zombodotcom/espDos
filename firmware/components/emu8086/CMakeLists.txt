@@ -39,4 +39,12 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
     -Wno-parentheses
     -Wno-implicit-fallthrough
     -Wno-logical-not-parentheses
+    # 8086tiny depends on `char` being signed (sign-extension in some
+    # of its compact opcode-decoding expressions). x86 GCC defaults to
+    # signed char and the host test passes; Xtensa-ESP-ELF GCC defaults
+    # to unsigned char and the same .bin only printed 'e' before walking
+    # off into zero memory. Reproduced on host by adding -funsigned-char,
+    # fixed by -fsigned-char. Keeps this component aligned with upstream
+    # 8086tiny's assumed environment.
+    -fsigned-char
 )

@@ -49,6 +49,15 @@ typedef int esp_err_t;
 #define EMU_KERNEL_SEG     0x0100u    /* = phys 0x1000 */
 #define EMU_KERNEL_OFFSET  0x0100u    /* matches `org 0x100` in 86DOS.ASM */
 
+/* The boot stub (asm/bootstub.asm) lives in low DOS memory above the
+ * IVT + BIOS data area but below the kernel. It's tiny — well under
+ * the 0x1000 - 0x0050 = 4 KB window between BIOS data area and the
+ * kernel. Segment 0x0050 puts it at phys 0x0500 (right after the
+ * BIOS data area at 0x0400 - 0x04FF). The boot stub is assembled
+ * with `org 0` so it can be loaded at any offset; we choose 0. */
+#define EMU_BOOT_SEG       0x0050u    /* = phys 0x0500 */
+#define EMU_BOOT_OFFSET    0x0000u
+
 
 /* Allocate the emulated 8086 RAM (~320 KB) from PSRAM if available
  * else internal DRAM, and wire up regs8/regs16 pointers. Call once. */

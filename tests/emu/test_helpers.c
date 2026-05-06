@@ -47,6 +47,25 @@ void t_dump_state(const char *label) {
            mem[phys], mem[phys+1], mem[phys+2]);
 }
 
+/* Host implementation of the BIOSSEG trap handler. The firmware's
+ * bios.c provides the real one against ESP-IDF APIs; on host we
+ * dispatch to whatever callback the current test registered. Tests
+ * that don't care (e.g., test_kernel_first_step) leave the callback
+ * NULL and we just log. */
+static t_bios_cb bios_cb = NULL;
+
+void t_set_bios_callback(t_bios_cb cb) {
+    bios_cb = cb;
+}
+
+void bios_handle_call(unsigned short ip) {
+    if (bios_cb) {
+        bios_cb(ip);
+        return;
+    }
+    printf("  [host bios stub] BIOSSEG call at ip=%04x — no-op\n", ip);
+}
+
 int t_check(const char *expr, int cond, const char *file, int line) {
     if (cond) {
         printf("  PASS: %s\n", expr);

@@ -153,6 +153,30 @@ _RE_JCC_RET = re.compile(
     re.IGNORECASE,
 )
 
+# R13b: `Jcc <label>` → `Jnotcc .skip; JMP <label>; .skip:`
+#
+# The 8086 only supports `Jcc rel8` (1-byte signed offset, ±127 bytes).
+# NASM at default CPU level (>= 386) silently upgrades any out-of-range
+# `Jcc` to the 80386+ `0F 8x rel16` form. 8086tiny doesn't decode the
+# `0F 8x` two-byte opcodes — it consumes `0F` as `POP CS` and falls into
+# garbage on the rest, which corrupts memory. The kernel's `JB CTRLOUT`
+# at file offset 0x102D (target 131 bytes away — just past rel8 range)
+# was the smoking gun: 4 bytes `0F 82 81 00` got mis-decoded as
+# `ADD WORD [BX+SI], 0x7F3C`, scribbling random data into DATMES.
+#
+# Fix: expand every `Jcc target` to a 5-byte sequence
+#   Jnotcc .skip
+#   JMP    target
+#   .skip:
+# This always uses 8086-legal opcodes (Jcc rel8 + JMP rel16) and works
+# regardless of distance. Minor cost: kernel grows by ~3 bytes per
+# conditional jump expanded.
+_RE_JCC_LABEL = re.compile(
+    r'^(?P<lead>\s*)(?P<jcc>' + '|'.join(_CONDITIONALS) + r')\s+'
+    r'(?P<target>[A-Za-z_]\w*)\s*(?P<comment>;.*)?$',
+    re.IGNORECASE,
+)
+
 def _invert_jcc(jcc):
     """Toggle the N: JZ↔JNZ, JC↔JNC, JBE↔JNBE, etc."""
     j = jcc.upper()
@@ -199,6 +223,14 @@ _RE_MOV_MEM_IMM = re.compile(
 # R19: JCXZ has no inverse mnemonic; expand `JCXZ RET` specially.
 _RE_JCXZ_RET = re.compile(
     r'^(?P<lead>\s*)JCXZ\s+RET\b\s*(?P<comment>;.*)?$',
+    re.IGNORECASE,
+)
+
+# R19b: `JCXZ <label>` — same problem as the other conditional jumps,
+# but JCXZ has no inverse mnemonic so we can't reuse R13b's pattern.
+# Expand to `JCXZ .take; JMP .skip; .take: JMP target; .skip:`.
+_RE_JCXZ_LABEL = re.compile(
+    r'^(?P<lead>\s*)JCXZ\s+(?P<target>[A-Za-z_]\w*)\s*(?P<comment>;.*)?$',
     re.IGNORECASE,
 )
 
@@ -386,6 +418,24 @@ def translate(lines):
             out.append(f"{label}:{('  ' + comment) if comment else ''}\n")
             continue
 
+        # R13b: `J<cond> <label>` → `Jnotcc .skip; JMP <label>; .skip:`
+        # Always expand so the assembled binary uses only 8086-legal
+        # `Jcc rel8` + `JMP rel16` opcodes — never the 80386+ `0F 8x
+        # rel16` form. (See the long comment by _RE_JCC_LABEL above.)
+        m = _RE_JCC_LABEL.match(line)
+        if m:
+            jcc = m.group('jcc')
+            target = m.group('target')
+            inv = _invert_jcc(jcc).lower()
+            label = f".scp_skip_{jcc_ret_counter:03d}"
+            jcc_ret_counter += 1
+            comment = m.group('comment') or ''
+            note = f"  ; SCP: {jcc.upper()} {target} (long-form for 8086)"
+            out.append(f"{m.group('lead')}{inv} {label}{note}\n")
+            out.append(f"\tjmp {target}\n")
+            out.append(f"{label}:{('  ' + comment) if comment else ''}\n")
+            continue
+
         # R9: JP <label> → jmp <label>.
         m = _RE_JP.match(line)
         if m:
@@ -457,6 +507,25 @@ def translate(lines):
             out.append(f"{label_ret}:\n")
             out.append(f"\tret\n")
             out.append(f"{label_done}:{('  ' + comment) if comment else ''}\n")
+            continue
+
+        # R19b: `JCXZ <label>` — same expansion shape as R19, but
+        # branching to <label> instead of inlining a return. Required
+        # because 8086's JCXZ is rel8-only and some targets exceed
+        # ±127 bytes after kernel growth from R13b.
+        m = _RE_JCXZ_LABEL.match(line)
+        if m:
+            target = m.group('target')
+            label_take = f".scp_jcxz_take_{jcc_ret_counter:03d}"
+            label_skip = f".scp_jcxz_skip_{jcc_ret_counter:03d}"
+            jcc_ret_counter += 1
+            comment = m.group('comment') or ''
+            note = f"  ; SCP: JCXZ {target} (long-form for 8086)"
+            out.append(f"{m.group('lead')}jcxz {label_take}{note}\n")
+            out.append(f"\tjmp {label_skip}\n")
+            out.append(f"{label_take}:\n")
+            out.append(f"\tjmp {target}\n")
+            out.append(f"{label_skip}:{('  ' + comment) if comment else ''}\n")
             continue
 
         # R18: `MOV [mem], imm` with no size and a non-register source.

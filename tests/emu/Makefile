@@ -17,7 +17,8 @@ CFLAGS := -std=c99 -Wall \
           -Wno-logical-not-parentheses -Wno-unused-but-set-variable \
           -Wno-unused-variable -Wno-unused-function
 
-TESTS := test_jmp_near.exe test_kernel_first_step.exe
+TESTS := test_jmp_near.exe test_kernel_first_step.exe test_bootstub.exe \
+        test_hello.exe test_kernel_banner.exe
 
 all: $(TESTS)
 
@@ -27,11 +28,26 @@ test_jmp_near.exe: test_jmp_near.c $(EMU_SRC) test_helpers.c
 test_kernel_first_step.exe: test_kernel_first_step.c $(EMU_SRC) test_helpers.c
 	gcc $(CFLAGS) $^ -o $@
 
+test_bootstub.exe: test_bootstub.c $(EMU_SRC) test_helpers.c
+	gcc $(CFLAGS) $^ -o $@
+
+test_hello.exe: test_hello.c $(EMU_SRC) test_helpers.c
+	gcc $(CFLAGS) $^ -o $@
+
+test_kernel_banner.exe: test_kernel_banner.c $(EMU_SRC) test_helpers.c
+	gcc $(CFLAGS) $^ -o $@
+
 run: all
 	@echo === test_jmp_near ===
 	@./test_jmp_near.exe ; echo "exit=$$?"
 	@echo === test_kernel_first_step ===
 	@./test_kernel_first_step.exe ; echo "exit=$$?"
+	@echo === test_bootstub ===
+	@./test_bootstub.exe ; echo "exit=$$?"
+	@echo === test_hello ===
+	@./test_hello.exe ; echo "exit=$$?"
+	@echo === test_kernel_banner ===
+	@./test_kernel_banner.exe ; echo "exit=$$?"
 
 clean:
 	rm -f *.exe

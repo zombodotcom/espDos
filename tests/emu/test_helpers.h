@@ -28,3 +28,11 @@ int  t_check(const char *expr, int cond, const char *file, int line);
 
 #define T_EXPECT(cond)        t_check(#cond, (cond), __FILE__, __LINE__)
 #define T_EXPECT_EQ(a, b)     t_check(#a " == " #b, (a) == (b), __FILE__, __LINE__)
+
+/* BIOS-call hook. The default `bios_handle_call` in test_helpers.c
+ * dispatches to whatever callback the current test registered, or
+ * logs and returns if none is set. Tests that exercise specific
+ * BIOSSEG entry points (BIOSOUT, BIOSIN, BIOSREAD, ...) install a
+ * callback that does the real work. */
+typedef void (*t_bios_cb)(unsigned short ip);
+void t_set_bios_callback(t_bios_cb cb);

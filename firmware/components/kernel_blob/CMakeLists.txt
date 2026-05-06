@@ -14,5 +14,8 @@
 idf_component_register(
     SRCS "kernel_blob.c"
     INCLUDE_DIRS "include"
-    EMBED_FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/kernel.bin"
+    EMBED_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/kernel.bin"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/bootstub.bin"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/hello.bin"
 )
