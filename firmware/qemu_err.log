@@ -1,0 +1,49 @@
+WARNING: The IDF_PYTHON_ENV_PATH is missing in environmental variables!
+CMake Error at C:/Users/zombo/esp/v5.4.1/esp-idf/tools/cmake/project.cmake:571 (__project):
+  The CMAKE_C_COMPILER:
+
+    xtensa-esp32s3-elf-gcc
+
+  is not a full path and was not found in the PATH.  Perhaps the extension is
+  missing?
+
+  Tell CMake where to find the compiler by setting either the environment
+  variable "CC" or the CMake cache entry CMAKE_C_COMPILER to the full path to
+  the compiler, or to the compiler name if it is in the PATH.
+Call Stack (most recent call first):
+  CMakeLists.txt:13 (project)
+
+
+CMake Error at C:/Users/zombo/esp/v5.4.1/esp-idf/tools/cmake/project.cmake:571 (__project):
+  The CMAKE_CXX_COMPILER:
+
+    xtensa-esp32s3-elf-g++
+
+  is not a full path and was not found in the PATH.  Perhaps the extension is
+  missing?
+
+  Tell CMake where to find the compiler by setting either the environment
+  variable "CXX" or the CMake cache entry CMAKE_CXX_COMPILER to the full path
+  to the compiler, or to the compiler name if it is in the PATH.
+Call Stack (most recent call first):
+  CMakeLists.txt:13 (project)
+
+
+CMake Error at C:/Users/zombo/esp/v5.4.1/esp-idf/tools/cmake/project.cmake:571 (__project):
+  The CMAKE_ASM_COMPILER:
+
+    xtensa-esp32s3-elf-gcc
+
+  is not a full path and was not found in the PATH.  Perhaps the extension is
+  missing?
+
+  Tell CMake where to find the compiler by setting either the environment
+  variable "ASM" or the CMake cache entry CMAKE_ASM_COMPILER to the full path
+  to the compiler, or to the compiler name if it is in the PATH.
+Call Stack (most recent call first):
+  CMakeLists.txt:13 (project)
+
+
+[0;33mHINT: Try to reinstall the toolchain for the chip that you trying to use. 
+For more information run 'idf.py docs -sp get-started/#installation' and follow the instructions for your system[0m
+cmake failed with exit code 1, output of the command is in the C:\Users\zombo\Desktop\Programming\dosNew\esp-dos\firmware\build\log\idf_py_stderr_output_94300 and C:\Users\zombo\Desktop\Programming\dosNew\esp-dos\firmware\build\log\idf_py_stdout_output_94300

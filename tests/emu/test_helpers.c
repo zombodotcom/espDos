@@ -3,9 +3,6 @@
 
 #include "test_helpers.h"
 
-/* These constants must match firmware/components/emu8086/8086tiny.c. */
-#define EMU_REGS_BASE  0x20000u
-
 /* Wire 8086tiny's regs8/regs16 pointers into the static mem[] array.
  * (The firmware does this in emu_alloc_mem(); on host we duplicate
  * here.) */
@@ -27,8 +24,7 @@ int t_load_bios(void) {
         perror("bios.bin");
         return 1;
     }
-    /* BIOS lands at regs8+0x100 = mem[REGS_BASE+0x100]. */
-    size_t n = fread(mem + EMU_REGS_BASE + 0x100, 1, 8192, f);
+    size_t n = fread(mem + EMU_REGS_BASE + EMU_BIOS_OFFSET, 1, 8192, f);
     fclose(f);
     if (n < 0x1000) {
         fprintf(stderr, "BIOS too short: %zu bytes\n", n);

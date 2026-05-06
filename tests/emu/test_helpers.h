@@ -3,15 +3,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Public interface from 8086tiny.c */
+/* Pull in the layout constants and emu_* declarations from the
+ * firmware header so tests and firmware share one source of truth. */
+#include "../../firmware/components/emu8086/include/emu8086.h"
+
+/* The mem array itself is declared in 8086tiny.c. */
 extern unsigned char mem[];
-extern int           emu_run_n(int max_steps);
-extern void          emu_init_state(void);
-extern void          emu_load_bios_tables(void);
-extern void          emu_set_cs_ip(unsigned short cs, unsigned short ip);
-extern unsigned short emu_get_cs(void);
-extern unsigned short emu_get_ip(void);
-extern unsigned short emu_get_ax(void);
 
 /* Test harness primitives. */
 

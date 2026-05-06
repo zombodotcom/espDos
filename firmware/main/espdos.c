@@ -64,10 +64,9 @@ void app_main(void)
     extern const uint8_t bios_bin_start[] asm("_binary_bios_bin_start");
     extern const uint8_t bios_bin_end[]   asm("_binary_bios_bin_end");
     size_t bios_len = (size_t)(bios_bin_end - bios_bin_start);
-    ESP_LOGI(TAG, "loading 8086tiny BIOS: %zu bytes at 2000:0100",
-             bios_len);
-    /* REGS_BASE=0x20000 in 8086tiny; segment 0x2000 maps to that. */
-    emu_load(0x2000, 0x0100, bios_bin_start, bios_len);
+    ESP_LOGI(TAG, "loading 8086tiny BIOS: %zu bytes at %04x:%04x",
+             bios_len, EMU_BIOS_SEG, EMU_BIOS_OFFSET);
+    emu_load(EMU_BIOS_SEG, EMU_BIOS_OFFSET, bios_bin_start, bios_len);
 
     /* Verify BIOS landed at the right place. */
     uint8_t *m = emu_mem();
@@ -86,19 +85,13 @@ void app_main(void)
                   "(BASE_INST_SIZE, I_W_SIZE)",
              bios_table_lookup[12][0xE9], bios_table_lookup[13][0xE9]);
 
-    /* Load kernel at KERNEL_SEG:0. DOS 1.0 originally loaded at
-     * a low segment after the bootstrap; we pick 0x0100 (= phys
-     * 0x1000), which leaves the IVT and BIOS data area at low
-     * memory and matches the kernel's `org 100h` (the assembled
-     * kernel.bin starts with JMP DOSINIT relative to 0). */
-    const uint16_t KERNEL_SEG = 0x0100;
-    ESP_LOGI(TAG, "loading kernel: %zu bytes at %04x:0000",
-             kernel_blob_size(), KERNEL_SEG);
-    emu_load(KERNEL_SEG, 0x0000, kernel_bin_start, kernel_blob_size());
+    ESP_LOGI(TAG, "loading kernel: %zu bytes at %04x:%04x",
+             kernel_blob_size(), EMU_KERNEL_SEG, EMU_KERNEL_OFFSET);
+    emu_load(EMU_KERNEL_SEG, EMU_KERNEL_OFFSET,
+             kernel_bin_start, kernel_blob_size());
 
-    /* Initialize CPU state and set the entry point. */
     emu_init_state();
-    emu_set_cs_ip(KERNEL_SEG, 0x0000);
+    emu_set_cs_ip(EMU_KERNEL_SEG, EMU_KERNEL_OFFSET);
 
     ESP_LOGI(TAG, "running emulator: CS:IP=%04x:%04x",
              emu_get_cs(), emu_get_ip());
