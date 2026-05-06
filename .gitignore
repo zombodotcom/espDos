@@ -6,6 +6,10 @@
 *.bin
 *.lst
 build/
+firmware/build/
+firmware/sdkconfig.old
+firmware/qemu_*.log
+firmware/qemu_*.bin
 
 # IDE / editor
 .vscode/

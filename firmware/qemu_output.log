@@ -1,9 +1,0 @@
-Adding "qemu"'s dependency "all" to list of commands with default set of options.
-Executing action: all (aliases: build)
-Running cmake in directory C:\Users\zombo\Desktop\Programming\dosNew\esp-dos\firmware\build
-Executing "cmake -G Ninja -DPYTHON_DEPS_CHECKED=1 -DPYTHON=C:\Users\zombo\.espressif\python_env\idf5.4_py3.13_env\Scripts\python.exe -DESP_PLATFORM=1 -DCCACHE_ENABLE=0 C:\Users\zombo\Desktop\Programming\dosNew\esp-dos\firmware"...
--- The C compiler identification is unknown
--- The CXX compiler identification is unknown
--- The ASM compiler identification is unknown
--- Found assembler: xtensa-esp32s3-elf-gcc
--- Configuring incomplete, errors occurred!
