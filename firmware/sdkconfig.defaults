@@ -1,0 +1,22 @@
+# espdos default sdkconfig.
+#
+# Target: ESP32-S3 (LilyGO T-Display-S3 has 8MB PSRAM, 16MB flash).
+# 8086tiny needs ~1.1 MB for its emulated 8086 RAM, which is far more
+# than the S3's 512KB internal DRAM. We allocate it from PSRAM.
+
+CONFIG_IDF_TARGET="esp32s3"
+
+# Enable PSRAM. Octal mode (8-line) is the T-Display-S3 default.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_TYPE_AUTO=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# Allow heap_caps_malloc(MALLOC_CAP_SPIRAM, ...) at runtime.
+CONFIG_SPIRAM_USE_MALLOC=y
+
+# Don't fail to boot if PSRAM init fails (QEMU may differ from real chip).
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+
+# Larger main task stack — emulator-driven workloads may want it.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
