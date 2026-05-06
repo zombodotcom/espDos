@@ -76,13 +76,15 @@ void app_main(void)
              m[0x20104], m[0x20105], m[0x20106], m[0x20107]);
 
     emu_load_bios_tables();
-    /* Spot-check a few populated table entries. TABLE_BASE_INST_SIZE
-     * should be table 0; for opcode 0xE9 (JMP near) the size is 3. */
+    /* Spot-check populated tables for opcode 0xE9 (JMP near).
+     * TABLE_XLAT_OPCODE = 8, BASE_INST_SIZE = 12, I_W_SIZE = 13.
+     * Expected: XLAT[0xE9] = 14 (decodes as OPCODE 14 = JMP/CALL). */
     extern unsigned char bios_table_lookup[20][256];
-    ESP_LOGI(TAG, "bios_table_lookup[0][0xE9]=0x%02x [0][0x00]=0x%02x "
-                  "[1][0xE9]=0x%02x",
-             bios_table_lookup[0][0xE9], bios_table_lookup[0][0x00],
-             bios_table_lookup[1][0xE9]);
+    ESP_LOGI(TAG, "table[8][0xE9]=0x%02x  (XLAT_OPCODE, expect 14)",
+             bios_table_lookup[8][0xE9]);
+    ESP_LOGI(TAG, "table[12][0xE9]=0x%02x  table[13][0xE9]=0x%02x  "
+                  "(BASE_INST_SIZE, I_W_SIZE)",
+             bios_table_lookup[12][0xE9], bios_table_lookup[13][0xE9]);
 
     /* Load kernel at KERNEL_SEG:0. DOS 1.0 originally loaded at
      * a low segment after the bootstrap; we pick 0x0100 (= phys
@@ -101,16 +103,17 @@ void app_main(void)
     ESP_LOGI(TAG, "running emulator: CS:IP=%04x:%04x",
              emu_get_cs(), emu_get_ip());
 
-    /* Run in chunks, logging CS:IP periodically. */
-    int total = 0;
-    for (int chunk = 0; chunk < 10; chunk++) {
-        int still_running = emu_run_n(50);
-        total += 50;
-        ESP_LOGI(TAG, "after %d steps: CS:IP=%04x:%04x AX=%04x running=%d",
-                 total, emu_get_cs(), emu_get_ip(), emu_get_ax(),
-                 still_running);
+    /* Step ONE instruction at a time and log opcode + CS:IP each step
+     * so we can see whether IP advances or freezes. */
+    for (int n = 0; n < 12; n++) {
+        uint8_t *m = emu_mem();
+        uint16_t cs = emu_get_cs(), ip = emu_get_ip();
+        uint32_t phys = ((uint32_t)cs << 4) + ip;
+        ESP_LOGI(TAG, "step %d  CS:IP=%04x:%04x  bytes=%02x %02x %02x  AX=%04x",
+                 n, cs, ip, m[phys], m[phys+1], m[phys+2], emu_get_ax());
+        int still_running = emu_run_n(1);
         if (!still_running) {
-            ESP_LOGI(TAG, "emulator halted (CS:IP=0:0)");
+            ESP_LOGI(TAG, "halted (CS:IP=0:0)");
             break;
         }
     }
