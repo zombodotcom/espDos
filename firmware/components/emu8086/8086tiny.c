@@ -324,6 +324,25 @@ int emu_run_n(int max_steps)
 	for (; opcode_stream = mem + 16 * regs16[REG_CS] + reg_ip, opcode_stream != mem;)
 	{
 		if (max_steps > 0 && n++ >= max_steps) return 1;
+
+		/* PATCH (espdos): BIOSSEG trap. When the kernel does a far
+		 * call into 0x0040, we don't want to execute whatever bytes
+		 * are at that location — we want to dispatch our own BIOS
+		 * handler and synthesize RETF. Detected at the top of each
+		 * iteration so the bytes at BIOSSEG never run. */
+		if (regs16[REG_CS] == 0x0040) {
+			extern void bios_handle_call(unsigned short ip);
+			bios_handle_call(reg_ip);
+			/* Simulate RETF: pop IP, then CS, off the emulated stack. */
+			unsigned char *sp = mem +
+				(((unsigned)regs16[REG_SS]) << 4) +
+				regs16[REG_SP];
+			reg_ip          = (unsigned short)(sp[0] | (sp[1] << 8));
+			regs16[REG_CS]  = (unsigned short)(sp[2] | (sp[3] << 8));
+			regs16[REG_SP] += 4;
+			continue;
+		}
+
 		// Set up variables to prepare for decoding an opcode
 		set_opcode(*opcode_stream);
 

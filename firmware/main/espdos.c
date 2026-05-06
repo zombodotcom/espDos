@@ -14,6 +14,7 @@
 
 #include "emu8086.h"
 #include "kernel_blob.h"
+#include "bios.h"
 
 static const char *TAG = "espdos";
 
@@ -48,6 +49,11 @@ void app_main(void)
     ESP_LOGI(TAG, "kernel_blob: %zu bytes embedded "
                   "(expecting ~5861 from 86DOS.ASM)", klen);
     hex_dump_first("kernel[0..15]", kernel_bin_start, 16);
+
+    /* Install UART driver so bios_in / bios_out can read+write
+     * with proper FreeRTOS yielding (otherwise the task watchdog
+     * fires when the kernel blocks on input). */
+    bios_init();
 
     /* Allocate the emulator's 320 KB memory from PSRAM/DRAM. */
     esp_err_t err = emu_alloc_mem();
@@ -93,26 +99,39 @@ void app_main(void)
     emu_init_state();
     emu_set_cs_ip(EMU_KERNEL_SEG, EMU_KERNEL_OFFSET);
 
-    ESP_LOGI(TAG, "running emulator: CS:IP=%04x:%04x",
+    ESP_LOGI(TAG, "running emulator: CS:IP=%04x:%04x  ----- 86-DOS output below -----",
              emu_get_cs(), emu_get_ip());
 
-    /* Step ONE instruction at a time and log opcode + CS:IP each step
-     * so we can see whether IP advances or freezes. */
-    for (int n = 0; n < 12; n++) {
-        uint8_t *m = emu_mem();
+    /* Run in 5K-instruction chunks; log CS:IP between chunks so we
+     * can see whether the kernel is making forward progress or stuck
+     * in a tight loop. Once we trust this, drop the heartbeat. */
+    uint64_t total_steps = 0;
+    uint16_t prev_ip = emu_get_ip();
+    int      same_ip_count = 0;
+    for (int beat = 0; beat < 200; beat++) {
+        int still_running = emu_run_n(100);
+        total_steps += 100;
         uint16_t cs = emu_get_cs(), ip = emu_get_ip();
-        uint32_t phys = ((uint32_t)cs << 4) + ip;
-        ESP_LOGI(TAG, "step %d  CS:IP=%04x:%04x  bytes=%02x %02x %02x  AX=%04x",
-                 n, cs, ip, m[phys], m[phys+1], m[phys+2], emu_get_ax());
-        int still_running = emu_run_n(1);
+        ESP_LOGI(TAG, "heartbeat %d: %llu steps  CS:IP=%04x:%04x  AX=%04x",
+                 beat, (unsigned long long)total_steps, cs, ip, emu_get_ax());
         if (!still_running) {
-            ESP_LOGI(TAG, "halted (CS:IP=0:0)");
+            ESP_LOGI(TAG, "----- emulator halted (CS:IP=0:0) -----");
             break;
         }
+        if (ip == prev_ip && cs == emu_get_cs()) {
+            if (++same_ip_count >= 3) {
+                ESP_LOGW(TAG, "IP stuck at %04x:%04x for 3 heartbeats — "
+                              "tight loop or hang", cs, ip);
+                break;
+            }
+        } else {
+            same_ip_count = 0;
+        }
+        prev_ip = ip;
+        vTaskDelay(1);
     }
 
 idle:
-    /* Idle. Plan 3 will replace this with full BIOS dispatch. */
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
     }

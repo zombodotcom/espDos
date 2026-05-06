@@ -7,7 +7,7 @@ cmake_minimum_required(VERSION 3.16)
 # only the components we touch sidesteps that and shortens build times.
 # (Required IDF components like freertos, log, esp_system, etc. get
 # pulled in transitively via REQUIRES inside each component manifest.)
-set(COMPONENTS main emu8086 kernel_blob)
+set(COMPONENTS main emu8086 kernel_blob bios)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(espdos)

@@ -15,7 +15,7 @@ idf_component_register(
         "8086tiny.c"
         "emu8086.c"
     INCLUDE_DIRS "include"
-    REQUIRES log
+    REQUIRES log bios
     EMBED_FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/8086tiny/bios.bin"
 )
 
