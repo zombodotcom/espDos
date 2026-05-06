@@ -20,42 +20,26 @@
 
 #include "emu8086.h"
 
-/* From 8086tiny.c. */
-extern unsigned char *mem;          /* allocated below                */
-extern unsigned char *regs8;        /* points at mem + REGS_BASE      */
-extern unsigned short *regs16;      /* word-aliased over regs8        */
+/* From 8086tiny.c. mem is a static array; regs8/regs16 are pointers
+ * we wire to mem+REGS_BASE in emu_alloc_mem(). */
+extern unsigned char  mem[];
+extern unsigned char *regs8;
+extern unsigned short *regs16;
 
 /* Constants kept in sync with 8086tiny.c's (overrideable) defaults. */
-#define EMU_RAM_SIZE_DEFAULT   0x40000u    /* 256 KB */
-#define EMU_REGS_BASE_DEFAULT  0x3FFC0u    /* near top of mem */
+#define EMU_RAM_SIZE_DEFAULT   0x30000u    /* 192 KB */
+#define EMU_REGS_BASE_DEFAULT  0x20000u    /* register file at seg 0x2000 */
 
 static const char *TAG = "emu8086";
 
 esp_err_t emu_alloc_mem(void) {
-    if (mem != NULL) return ESP_OK;
-
-    /* Try PSRAM first (8MB on T-Display-S3 hardware). On QEMU S3 PSRAM
-     * is not emulated, so fall back to internal DRAM — fine because we
-     * set RAM_SIZE = 256 KB which fits there. */
-    mem = (unsigned char *)heap_caps_calloc(1, EMU_RAM_SIZE_DEFAULT,
-            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (mem == NULL) {
-        ESP_LOGI(TAG, "PSRAM unavailable, using internal DRAM");
-        mem = (unsigned char *)heap_caps_calloc(1, EMU_RAM_SIZE_DEFAULT,
-                MALLOC_CAP_8BIT);
-    }
-    if (mem == NULL) {
-        ESP_LOGE(TAG, "could not allocate %u bytes for emu RAM",
-                 EMU_RAM_SIZE_DEFAULT);
-        return ESP_ERR_NO_MEM;
-    }
-
-    /* 8086tiny puts its register file at REGS_BASE inside mem. */
+    /* mem[] is a static array now (declared in 8086tiny.c). We just
+     * need to wire up regs8/regs16 to point into it at REGS_BASE. */
     regs8  = mem + EMU_REGS_BASE_DEFAULT;
     regs16 = (unsigned short *)regs8;
 
-    ESP_LOGI(TAG, "allocated %u bytes at %p (regs8=%p)",
-             EMU_RAM_SIZE_DEFAULT, (void *)mem, (void *)regs8);
+    ESP_LOGI(TAG, "emu RAM static at %p (%u bytes), regs8=%p",
+             (void *)mem, EMU_RAM_SIZE_DEFAULT, (void *)regs8);
     return ESP_OK;
 }
 
@@ -63,6 +47,15 @@ size_t emu_ram_size(void) {
     return EMU_RAM_SIZE_DEFAULT;
 }
 
-const uint8_t *emu_ram(void) {
-    return (const uint8_t *)mem;
+uint8_t *emu_mem(void) {
+    return (uint8_t *)mem;
+}
+
+void emu_load(uint16_t seg, uint16_t off, const void *src, size_t n) {
+    uint32_t phys = ((uint32_t)seg << 4) + off;
+    if (phys + n > EMU_RAM_SIZE_DEFAULT) {
+        ESP_LOGE(TAG, "emu_load OOB: seg=%04x off=%04x n=%zu", seg, off, n);
+        return;
+    }
+    memcpy(mem + phys, src, n);
 }

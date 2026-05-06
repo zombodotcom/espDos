@@ -48,18 +48,27 @@ static inline int ftime(struct timeb *t) { t->millitm = 0; return 0; }
 
 // Emulator system constants. PATCH (ESP-IDF): the upstream values
 // (1.06 MB RAM, register file at 0xF0000) don't fit in the S3's 256 KB
-// internal DRAM, and QEMU's S3 model lacks PSRAM. We shrink to 256 KB
-// total — DOS 1.0 only needs ~70 KB at runtime (6 KB kernel + a 64 KB
-// user-program segment + scratch). Override via -D... at build time on
-// hardware where PSRAM is available.
+// internal DRAM, and QEMU's S3 model lacks PSRAM. We shrink the layout
+// while preserving 8086tiny's invariant that REGS_BASE is followed by
+// the BIOS image at REGS_BASE+0x100 (the BIOS contains the lookup tables
+// the instruction decoder needs). 8086tiny's `bios` blob is 7,665 bytes,
+// so REGS_BASE+0x1F00 fits comfortably below RAM_SIZE.
+//
+// Layout (192 KB total — fits in S3 internal DRAM after FreeRTOS +
+// other IDF static allocations):
+//   0x00000 - 0x1FFFF   DOS working memory: kernel at seg 0x0100,
+//                       user .COM at seg 0x1000 fills 64KB (128 KB)
+//   0x20000 - 0x2001F   register file (32 bytes at REGS_BASE = seg 0x2000)
+//   0x20100 - 0x21FFF   8086tiny BIOS image (~8 KB, includes lookup tables)
+//   0x22000 - 0x2FFFF   slack
 #ifndef IO_PORT_COUNT
 #define IO_PORT_COUNT 0x10000
 #endif
 #ifndef RAM_SIZE
-#define RAM_SIZE 0x40000   /* 256 KB */
+#define RAM_SIZE 0x30000   /* 192 KB */
 #endif
 #ifndef REGS_BASE
-#define REGS_BASE 0x3FFC0  /* register file (~64 bytes) at top of mem */
+#define REGS_BASE 0x20000  /* register file at 128 KB into mem */
 #endif
 #ifndef VIDEO_RAM_SIZE
 #define VIDEO_RAM_SIZE 0x10000
@@ -195,14 +204,15 @@ static inline int ftime(struct timeb *t) { t->millitm = 0; return 0; }
 #define SDL_KEYBOARD_DRIVER sdl_screen ? SDL_PollEvent(&sdl_event) && (sdl_event.type == SDL_KEYDOWN || sdl_event.type == SDL_KEYUP) && (scratch_uint = sdl_event.key.keysym.unicode, scratch2_uint = sdl_event.key.keysym.mod, CAST(short)mem[0x4A6] = 0x400 + 0x800*!!(scratch2_uint & KMOD_ALT) + 0x1000*!!(scratch2_uint & KMOD_SHIFT) + 0x2000*!!(scratch2_uint & KMOD_CTRL) + 0x4000*(sdl_event.type == SDL_KEYUP) + ((!scratch_uint || scratch_uint > 0x7F) ? sdl_event.key.keysym.sym : scratch_uint), pc_interrupt(7)) : (KEYBOARD_DRIVER)
 #endif
 
-/* PATCH (ESP-IDF): the original declared `mem[RAM_SIZE]` (~1.06 MB) as
- * a static global, which overflows the ESP32-S3's 256KB internal DRAM
- * by ~825KB. Make it a pointer instead; emu_init() allocates from
- * PSRAM at startup. The host (or main()) must initialize this before
- * any other emulator code runs. */
+/* PATCH (ESP-IDF): kept as a static array (was the upstream pattern)
+ * but now sized per RAM_SIZE = 256 KB, which fits in the S3's
+ * internal DRAM. Reserving in BSS guarantees a contiguous block
+ * regardless of heap fragmentation; on hardware where PSRAM is
+ * available we could still XIP this region into PSRAM via
+ * EXT_RAM_BSS_ATTR, but for v1 we stick with internal DRAM. */
 
 // Global variable definitions
-unsigned char *mem;
+unsigned char mem[RAM_SIZE];
 unsigned char io_ports[IO_PORT_COUNT], *opcode_stream, *regs8, i_rm, i_w, i_reg, i_mod, i_mod_size, i_d, i_reg4bit, raw_opcode_id, xlat_opcode_id, extra, rep_mode, seg_override_en, rep_override_en, trap_flag, int8_asap, scratch_uchar, io_hi_lo, *vid_mem_base, spkr_en, bios_table_lookup[20][256];
 unsigned short *regs16, reg_ip, seg_override, file_index, wave_counter;
 unsigned int op_source, op_dest, rm_addr, op_to_addr, op_from_addr, i_data0, i_data1, i_data2, scratch_uint, scratch2_uint, inst_counter, set_flags_type, GRAPHICS_X, GRAPHICS_Y, pixel_colors[16], vmem_ctr;
@@ -303,52 +313,17 @@ void audio_callback(void *data, unsigned char *stream, int len)
 }
 #endif
 
-// Emulator entry point — original 8086tiny standalone main(). When
-// embedded as a library inside another project (espdos firmware uses
-// EMU_LIBRARY_MODE), this main() is omitted; instead the host calls
-// emu_init() and emu_step() (defined later in this file) directly.
-#ifndef EMU_LIBRARY_MODE
-int main(int argc, char **argv)
+// PATCH (espdos): emu_run_n() ? runs at most `max_steps` instructions
+// (or until CS:IP=0:0 if max_steps == 0). Both the original
+// standalone main() below and our ESP-IDF firmware's app_main call
+// into this. The for-loop body is otherwise byte-identical to the
+// upstream 8086tiny instruction execution loop.
+int emu_run_n(int max_steps)
 {
-#ifndef NO_GRAPHICS
-	// Initialise SDL
-	SDL_Init(SDL_INIT_AUDIO);
-	sdl_audio.callback = audio_callback;
-#ifdef _WIN32
-	sdl_audio.samples = 512;
-#endif
-	SDL_OpenAudio(&sdl_audio, 0);
-#endif
-
-	// regs16 and reg8 point to F000:0, the start of memory-mapped registers. CS is initialised to F000
-	regs16 = (unsigned short *)(regs8 = mem + REGS_BASE);
-	regs16[REG_CS] = 0xF000;
-
-	// Trap flag off
-	regs8[FLAG_TF] = 0;
-
-	// Set DL equal to the boot device: 0 for the FD, or 0x80 for the HD. Normally, boot from the FD.
-	// But, if the HD image file is prefixed with @, then boot from the HD
-	regs8[REG_DL] = ((argc > 3) && (*argv[3] == '@')) ? argv[3]++, 0x80 : 0;
-
-	// Open BIOS (file id disk[2]), floppy disk image (disk[1]), and hard disk image (disk[0]) if specified
-	for (file_index = 3; file_index;)
-		disk[--file_index] = *++argv ? open(*argv, 32898) : 0;
-
-	// Set CX:AX equal to the hard disk image size, if present
-	CAST(unsigned)regs16[REG_AX] = *disk ? lseek(*disk, 0, 2) >> 9 : 0;
-
-	// Load BIOS image into F000:0100, and set IP to 0100
-	read(disk[2], regs8 + (reg_ip = 0x100), 0xFF00);
-
-	// Load instruction decoding helper table
-	for (int i = 0; i < 20; i++)
-		for (int j = 0; j < 256; j++)
-			bios_table_lookup[i][j] = regs8[regs16[0x81 + i] + j];
-
-	// Instruction execution loop. Terminates if CS:IP = 0:0
+	int n = 0;
 	for (; opcode_stream = mem + 16 * regs16[REG_CS] + reg_ip, opcode_stream != mem;)
 	{
+		if (max_steps > 0 && n++ >= max_steps) return 1;
 		// Set up variables to prepare for decoding an opcode
 		set_opcode(*opcode_stream);
 
@@ -808,11 +783,99 @@ int main(int argc, char **argv)
 		// then process the tick and check for new keystrokes
 		if (int8_asap && !seg_override_en && !rep_override_en && regs8[FLAG_IF] && !regs8[FLAG_TF])
 			pc_interrupt(0xA), int8_asap = 0, SDL_KEYBOARD_DRIVER;
-	}
+		}
+	return 0;
+}
+
+// PATCH (espdos): tiny helpers exposed to the firmware. These need
+// access to the OPCODE/MEM_OP macros and the typed globals declared
+// above, so they live here instead of in emu8086.c.
+
+// Initialize CPU state: trap flag off, CS:IP set, segment-override
+// counters cleared. Caller has already populated mem[] and lookup
+// tables.
+void emu_set_cs_ip(unsigned short cs, unsigned short ip)
+{
+	regs16[REG_CS] = cs;
+	reg_ip = ip;
+}
+
+void emu_init_state(void)
+{
+	regs8[FLAG_TF] = 0;
+	regs8[REG_DL] = 0;        // boot device 0 (FD); irrelevant to us
+	seg_override_en = 0;
+	rep_override_en = 0;
+	trap_flag = 0;
+	int8_asap = 0;
+	inst_counter = 0;
+}
+
+// Run the same lookup-table population main() does after loading the
+// BIOS image at REGS_BASE+0x100. Caller must have copied 8086tiny's
+// `bios` blob there first.
+void emu_load_bios_tables(void)
+{
+	for (int i = 0; i < 20; i++)
+		for (int j = 0; j < 256; j++)
+			bios_table_lookup[i][j] = regs8[regs16[0x81 + i] + j];
+}
+
+// Read accessors for logging.
+unsigned short emu_get_cs(void) { return regs16[REG_CS]; }
+unsigned short emu_get_ip(void) { return reg_ip; }
+unsigned short emu_get_ax(void) { return regs16[REG_AX]; }
+
+// Emulator entry point ??? original 8086tiny standalone main(). When
+// embedded as a library inside another project (espdos firmware uses
+// EMU_LIBRARY_MODE), this main() is omitted; instead the host calls
+// emu_init() and emu_step() (defined later in this file) directly.
+#ifndef EMU_LIBRARY_MODE
+int main(int argc, char **argv)
+{
+#ifndef NO_GRAPHICS
+	// Initialise SDL
+	SDL_Init(SDL_INIT_AUDIO);
+	sdl_audio.callback = audio_callback;
+#ifdef _WIN32
+	sdl_audio.samples = 512;
+#endif
+	SDL_OpenAudio(&sdl_audio, 0);
+#endif
+
+	// regs16 and reg8 point to F000:0, the start of memory-mapped registers. CS is initialised to F000
+	regs16 = (unsigned short *)(regs8 = mem + REGS_BASE);
+	regs16[REG_CS] = 0xF000;
+
+	// Trap flag off
+	regs8[FLAG_TF] = 0;
+
+	// Set DL equal to the boot device: 0 for the FD, or 0x80 for the HD. Normally, boot from the FD.
+	// But, if the HD image file is prefixed with @, then boot from the HD
+	regs8[REG_DL] = ((argc > 3) && (*argv[3] == '@')) ? argv[3]++, 0x80 : 0;
+
+	// Open BIOS (file id disk[2]), floppy disk image (disk[1]), and hard disk image (disk[0]) if specified
+	for (file_index = 3; file_index;)
+		disk[--file_index] = *++argv ? open(*argv, 32898) : 0;
+
+	// Set CX:AX equal to the hard disk image size, if present
+	CAST(unsigned)regs16[REG_AX] = *disk ? lseek(*disk, 0, 2) >> 9 : 0;
+
+	// Load BIOS image into F000:0100, and set IP to 0100
+	read(disk[2], regs8 + (reg_ip = 0x100), 0xFF00);
+
+	// Load instruction decoding helper table
+	for (int i = 0; i < 20; i++)
+		for (int j = 0; j < 256; j++)
+			bios_table_lookup[i][j] = regs8[regs16[0x81 + i] + j];
+
+	// Instruction execution loop. Body extracted into emu_run_n.
+	emu_run_n(0);
+
 
 #ifndef NO_GRAPHICS
 	SDL_Quit();
 #endif
 	return 0;
 }
-#endif /* EMU_LIBRARY_MODE — closes the standalone-main guard */
+#endif /* EMU_LIBRARY_MODE ??? closes the standalone-main guard */

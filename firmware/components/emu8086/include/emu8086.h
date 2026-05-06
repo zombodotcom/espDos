@@ -8,29 +8,32 @@
  * emu8086 — public API for the Adrian-Cable 8086tiny instruction
  * decoder + executor, adapted to be driven a step at a time from an
  * ESP-IDF main loop.
- *
- * Plan 2a: minimum surface to verify the component links and the
- * emulated RAM allocates correctly from PSRAM. The instruction-
- * stepping API (emu_init / emu_step) arrives in Plan 2b once we lift
- * the for-loop body out of 8086tiny's standalone main().
  */
 
-/* Allocate the ~1MB emulated RAM from PSRAM and wire up the register
- * file pointers. Call once at startup before any other emu_* call. */
+/* Allocate the emulated 8086 RAM (~320 KB) from PSRAM if available
+ * else internal DRAM, and wire up regs8/regs16 pointers. Call once. */
 esp_err_t emu_alloc_mem(void);
 
-/* Returns the size of 8086tiny's emulated RAM array (RAM_SIZE = 0x10FFF0). */
+/* Capacity (bytes) of the emulated RAM allocation. */
 size_t emu_ram_size(void);
 
-/* Direct access to 8086tiny's emulated RAM. NULL until emu_alloc_mem()
- * succeeds. Plan 3 BIOS handlers will use this to pull bytes for disk
- * reads, etc. */
-const uint8_t *emu_ram(void);
+/* Direct access to the emulated RAM for copying kernel/BIOS bytes
+ * into specific physical addresses. NULL until emu_alloc_mem(). */
+uint8_t *emu_mem(void);
 
-/* Plan 2b will add:
- *   void emu_init(uint16_t cs, uint16_t ip);
- *   void emu_load(uint32_t phys_addr, const void *data, size_t n);
- *   int  emu_step(void);     // 0 = halted, 1 = running
- *   uint16_t emu_cs(void);
- *   uint16_t emu_ip(void);
- */
+/* Convenience: copy `n` bytes from `src` into emu memory at the
+ * given seg:off (8086 real-mode physical address = seg*16 + off). */
+void emu_load(uint16_t seg, uint16_t off, const void *src, size_t n);
+
+/* From 8086tiny.c (defined alongside the instruction loop). */
+void           emu_init_state(void);
+void           emu_load_bios_tables(void);
+void           emu_set_cs_ip(unsigned short cs, unsigned short ip);
+unsigned short emu_get_cs(void);
+unsigned short emu_get_ip(void);
+unsigned short emu_get_ax(void);
+
+/* Run at most `max_steps` instructions. Returns:
+ *   0 — emulator halted (CS:IP became 0:0)
+ *   1 — still running (max_steps reached, can be called again)  */
+int emu_run_n(int max_steps);

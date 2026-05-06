@@ -16,6 +16,7 @@ idf_component_register(
         "emu8086.c"
     INCLUDE_DIRS "include"
     REQUIRES log
+    EMBED_FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/8086tiny/bios.bin"
 )
 
 # Tell 8086tiny.c to omit its standalone main() so it can be used as a
@@ -23,4 +24,19 @@ idf_component_register(
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     EMU_LIBRARY_MODE=1
     NO_GRAPHICS=1
+)
+
+# 8086tiny is heavy on comma-operator chains, fall-through switches,
+# and operator-precedence shortcuts that ESP-IDF's -Werror rejects.
+# These are intentional in the upstream design (Adrian Cable went for
+# minimum source size), not bugs. Relax just for this component.
+target_compile_options(${COMPONENT_LIB} PRIVATE
+    -Wno-error=unused-value
+    -Wno-error=parentheses
+    -Wno-error=implicit-fallthrough
+    -Wno-error=logical-not-parentheses
+    -Wno-unused-value
+    -Wno-parentheses
+    -Wno-implicit-fallthrough
+    -Wno-logical-not-parentheses
 )

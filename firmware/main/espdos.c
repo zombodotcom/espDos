@@ -49,26 +49,74 @@ void app_main(void)
                   "(expecting ~5861 from 86DOS.ASM)", klen);
     hex_dump_first("kernel[0..15]", kernel_bin_start, 16);
 
-    /* Allocate the emulator's 1.06 MB memory from PSRAM. */
+    /* Allocate the emulator's 320 KB memory from PSRAM/DRAM. */
     esp_err_t err = emu_alloc_mem();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "emu_alloc_mem failed: %s", esp_err_to_name(err));
+        goto idle;
     }
-    size_t rsz = emu_ram_size();
-    const uint8_t *ram = emu_ram();
-    ESP_LOGI(TAG, "emu8086 ram: %zu bytes at %p", rsz, (void *)ram);
+    ESP_LOGI(TAG, "emu8086 ram: %zu bytes at %p", emu_ram_size(),
+             (void *)emu_mem());
 
-    /* Sanity check: kernel should start with JMP near (0xE9) per
-     * `nasm -l kernel.lst` showing JMP DOSINIT at offset 0. */
-    if (kernel_bin_start[0] == 0xE9u) {
-        ESP_LOGI(TAG, "Plan 2a OK: kernel embeds correctly, "
-                      "first byte is JMP (0xE9) as expected.");
-    } else {
-        ESP_LOGE(TAG, "Plan 2a FAIL: kernel[0] = 0x%02x, expected 0xE9",
-                 kernel_bin_start[0]);
+    /* Plan 2b: load 8086tiny BIOS at REGS_BASE+0x100 (segment 0x4000,
+     * offset 0x100) so the instruction decoder's lookup tables work,
+     * then load Tim Paterson's kernel at KERNEL_SEG:0 and run. */
+    extern const uint8_t bios_bin_start[] asm("_binary_bios_bin_start");
+    extern const uint8_t bios_bin_end[]   asm("_binary_bios_bin_end");
+    size_t bios_len = (size_t)(bios_bin_end - bios_bin_start);
+    ESP_LOGI(TAG, "loading 8086tiny BIOS: %zu bytes at 2000:0100",
+             bios_len);
+    /* REGS_BASE=0x20000 in 8086tiny; segment 0x2000 maps to that. */
+    emu_load(0x2000, 0x0100, bios_bin_start, bios_len);
+
+    /* Verify BIOS landed at the right place. */
+    uint8_t *m = emu_mem();
+    ESP_LOGI(TAG, "mem[0x20100..0x20107] = %02x %02x %02x %02x %02x %02x %02x %02x",
+             m[0x20100], m[0x20101], m[0x20102], m[0x20103],
+             m[0x20104], m[0x20105], m[0x20106], m[0x20107]);
+
+    emu_load_bios_tables();
+    /* Spot-check a few populated table entries. TABLE_BASE_INST_SIZE
+     * should be table 0; for opcode 0xE9 (JMP near) the size is 3. */
+    extern unsigned char bios_table_lookup[20][256];
+    ESP_LOGI(TAG, "bios_table_lookup[0][0xE9]=0x%02x [0][0x00]=0x%02x "
+                  "[1][0xE9]=0x%02x",
+             bios_table_lookup[0][0xE9], bios_table_lookup[0][0x00],
+             bios_table_lookup[1][0xE9]);
+
+    /* Load kernel at KERNEL_SEG:0. DOS 1.0 originally loaded at
+     * a low segment after the bootstrap; we pick 0x0100 (= phys
+     * 0x1000), which leaves the IVT and BIOS data area at low
+     * memory and matches the kernel's `org 100h` (the assembled
+     * kernel.bin starts with JMP DOSINIT relative to 0). */
+    const uint16_t KERNEL_SEG = 0x0100;
+    ESP_LOGI(TAG, "loading kernel: %zu bytes at %04x:0000",
+             kernel_blob_size(), KERNEL_SEG);
+    emu_load(KERNEL_SEG, 0x0000, kernel_bin_start, kernel_blob_size());
+
+    /* Initialize CPU state and set the entry point. */
+    emu_init_state();
+    emu_set_cs_ip(KERNEL_SEG, 0x0000);
+
+    ESP_LOGI(TAG, "running emulator: CS:IP=%04x:%04x",
+             emu_get_cs(), emu_get_ip());
+
+    /* Run in chunks, logging CS:IP periodically. */
+    int total = 0;
+    for (int chunk = 0; chunk < 10; chunk++) {
+        int still_running = emu_run_n(50);
+        total += 50;
+        ESP_LOGI(TAG, "after %d steps: CS:IP=%04x:%04x AX=%04x running=%d",
+                 total, emu_get_cs(), emu_get_ip(), emu_get_ax(),
+                 still_running);
+        if (!still_running) {
+            ESP_LOGI(TAG, "emulator halted (CS:IP=0:0)");
+            break;
+        }
     }
 
-    /* Idle. Plan 2b replaces this with the emu_step loop. */
+idle:
+    /* Idle. Plan 3 will replace this with full BIOS dispatch. */
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
     }
