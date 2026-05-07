@@ -1,20 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
-
-# Restrict build to only what `main` and its dependencies actually need.
-# The default (no COMPONENTS set) builds the entire IDF component tree —
-# which on this toolchain triggers a GCC internal compiler error (segfault)
-# while building esp_lcd_panel_rgb.c, a component we don't use. Listing
-# only the components we touch sidesteps that and shortens build times.
-# (Required IDF components like freertos, log, esp_system, etc. get
-# pulled in transitively via REQUIRES inside each component manifest.)
-#
-# IMPORTANT: esp_psram MUST be listed explicitly here. It is not a
-# transitive dependency of esp8086 — but its Kconfig defines
-# CONFIG_SPIRAM and friends. Excluding it makes kconfig silently drop
-# `CONFIG_SPIRAM=y` from sdkconfig.defaults, so EXT_RAM_BSS_ATTR turns
-# into a no-op and esp8086.c's 1 MB mem[] tries to fit in 512 KB DRAM,
-# overflowing by ~900 KB at link time.
-set(COMPONENTS main esp8086 kernel_blob bios esp_psram)
+cmake_minimum_required(VERSION 3.22)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(espdos)
