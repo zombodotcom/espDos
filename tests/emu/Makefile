@@ -24,7 +24,8 @@ TESTS := test_jmp_near.exe test_kernel_first_step.exe test_bootstub.exe \
         test_hello.exe test_kernel_banner.exe test_memory_bounds.exe \
         test_fininit_stack.exe test_loader.exe test_mandel.exe \
         test_julia.exe \
-        test_display_ansi_strip.exe test_display_ring_buffer.exe
+        test_display_ansi_strip.exe test_display_ring_buffer.exe \
+        test_subpixel_glyph_table.exe
 
 all: $(TESTS)
 
@@ -64,6 +65,9 @@ test_display_ansi_strip.exe: test_display_ansi_strip.c $(DISPLAY_LOG)
 test_display_ring_buffer.exe: test_display_ring_buffer.c $(DISPLAY_LOG)
 	gcc $(CFLAGS) $(DISPLAY_INC) $^ -o $@
 
+test_subpixel_glyph_table.exe: test_subpixel_glyph_table.c
+	gcc $(CFLAGS) $(DISPLAY_INC) $< -o $@ -lm
+
 run: all
 	@echo === test_jmp_near ===
 	@./test_jmp_near.exe ; echo "exit=$$?"
@@ -89,6 +93,8 @@ run: all
 	@./test_display_ansi_strip.exe ; echo "exit=$$?"
 	@echo === test_display_ring_buffer ===
 	@./test_display_ring_buffer.exe ; echo "exit=$$?"
+	@echo === test_subpixel_glyph_table ===
+	@./test_subpixel_glyph_table.exe ; echo "exit=$$?"
 
 clean:
 	rm -f *.exe
