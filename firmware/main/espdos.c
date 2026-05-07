@@ -107,28 +107,28 @@ void app_main(void)
      * Without the DPB, NUMDRV ends up zero, no drives get configured,
      * and the kernel's later disk + exit paths corrupt themselves. */
     /* Use the mandel-loader variant of the bootstub so the demo loads
-     * MANDEL.COM (impressive output) instead of HELLO.COM ("transient
-     * ok"). Both bootstubs are byte-identical except for the embedded
-     * LOAD_SECTOR — see asm/build_kernel.sh for how they're built.
-     * Define ESPDOS_LOADER_HELLO to swap back. */
+     * SHELL.COM (interactive menu) so the user lands at a picker on
+     * boot. Override with -DESPDOS_LOADER_<NAME>=1 (HELLO, COUNT,
+     * MANDEL, JULIA, or LIFE) to skip the menu and boot directly into
+     * one program — useful for QEMU and demo recordings. */
 #if defined(ESPDOS_LOADER_HELLO)
     extern const uint8_t bootstub_bin_start[] asm("_binary_bootstub_bin_start");
     extern const uint8_t bootstub_bin_end[]   asm("_binary_bootstub_bin_end");
 #elif defined(ESPDOS_LOADER_COUNT)
     extern const uint8_t bootstub_bin_start[] asm("_binary_bootstub_count_bin_start");
     extern const uint8_t bootstub_bin_end[]   asm("_binary_bootstub_count_bin_end");
-#elif defined(ESPDOS_LOADER_SHELL)
-    extern const uint8_t bootstub_bin_start[] asm("_binary_bootstub_shell_bin_start");
-    extern const uint8_t bootstub_bin_end[]   asm("_binary_bootstub_shell_bin_end");
+#elif defined(ESPDOS_LOADER_MANDEL)
+    extern const uint8_t bootstub_bin_start[] asm("_binary_bootstub_mandel_bin_start");
+    extern const uint8_t bootstub_bin_end[]   asm("_binary_bootstub_mandel_bin_end");
 #elif defined(ESPDOS_LOADER_JULIA)
     extern const uint8_t bootstub_bin_start[] asm("_binary_bootstub_julia_bin_start");
     extern const uint8_t bootstub_bin_end[]   asm("_binary_bootstub_julia_bin_end");
 #elif defined(ESPDOS_LOADER_LIFE)
     extern const uint8_t bootstub_bin_start[] asm("_binary_bootstub_life_bin_start");
     extern const uint8_t bootstub_bin_end[]   asm("_binary_bootstub_life_bin_end");
-#else
-    extern const uint8_t bootstub_bin_start[] asm("_binary_bootstub_mandel_bin_start");
-    extern const uint8_t bootstub_bin_end[]   asm("_binary_bootstub_mandel_bin_end");
+#else  /* default: SHELL.COM */
+    extern const uint8_t bootstub_bin_start[] asm("_binary_bootstub_shell_bin_start");
+    extern const uint8_t bootstub_bin_end[]   asm("_binary_bootstub_shell_bin_end");
 #endif
     display_init();
     display_set_program(
@@ -136,14 +136,14 @@ void app_main(void)
         "HELLO.COM"
 #elif defined(ESPDOS_LOADER_COUNT)
         "COUNT.COM"
-#elif defined(ESPDOS_LOADER_SHELL)
-        "SHELL.COM"
+#elif defined(ESPDOS_LOADER_MANDEL)
+        "MANDEL.COM"
 #elif defined(ESPDOS_LOADER_JULIA)
         "JULIA.COM"
 #elif defined(ESPDOS_LOADER_LIFE)
         "LIFE.COM"
 #else
-        "MANDEL.COM"
+        "SHELL.COM"
 #endif
     );
     size_t bootstub_len = (size_t)(bootstub_bin_end - bootstub_bin_start);

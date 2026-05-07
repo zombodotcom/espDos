@@ -15,49 +15,52 @@ if(ESPDOS_PAYLOAD_HELLO)
                    "(confidence harness)")
 endif()
 
-# Optional: load HELLO.COM (sector 11) via bootstub instead of the
-# default MANDEL.COM (sector 12). Picks the bootstub-hello variant so
-# the kernel's transient loader reads cluster 2 not cluster 3.
+# Default: SHELL.COM — interactive menu, dispatches to HELLO/COUNT/
+# MANDEL/JULIA/LIFE based on a single keystroke. The flags below opt
+# OUT of the menu and boot directly into one program (skip-the-menu
+# is useful for QEMU runs and demo recordings).
+
+# Boot directly into HELLO.COM (sector 11): banner box.
 #   idf.py build -DESPDOS_LOADER_HELLO=1
 if(ESPDOS_LOADER_HELLO)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE ESPDOS_LOADER_HELLO=1)
-    message(STATUS "espdos: building with HELLO.COM loader "
-                   "(default is MANDEL.COM)")
+    message(STATUS "espdos: building with HELLO.COM loader (skips SHELL menu)")
 endif()
 
-# Optional: load COUNT.COM (sector 13) — counts 1..50 in decimal.
+# Boot directly into COUNT.COM (sector 13): counts 1..50.
 #   idf.py build -DESPDOS_LOADER_COUNT=1
 if(ESPDOS_LOADER_COUNT)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE ESPDOS_LOADER_COUNT=1)
-    message(STATUS "espdos: building with COUNT.COM loader "
-                   "(default is MANDEL.COM)")
+    message(STATUS "espdos: building with COUNT.COM loader (skips SHELL menu)")
 endif()
 
-# Optional: load SHELL.COM (sector 14) — interactive program selector.
-# Reads a digit (1=HELLO, 2=COUNT, 3=MANDEL, 4=JULIA) and dispatches.
+# Boot directly into MANDEL.COM (sector 12): Q4.12 fixed-point ASCII Mandelbrot.
+#   idf.py build -DESPDOS_LOADER_MANDEL=1
+if(ESPDOS_LOADER_MANDEL)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE ESPDOS_LOADER_MANDEL=1)
+    message(STATUS "espdos: building with MANDEL.COM loader (skips SHELL menu)")
+endif()
+
+# Boot directly into SHELL.COM (sector 14). This is the default already;
+# the flag exists for explicit/QEMU invocations and back-compat.
 #   idf.py build -DESPDOS_LOADER_SHELL=1
 if(ESPDOS_LOADER_SHELL)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE ESPDOS_LOADER_SHELL=1)
-    message(STATUS "espdos: building with SHELL.COM loader "
-                   "(default is MANDEL.COM)")
+    message(STATUS "espdos: SHELL.COM loader (default; flag is a no-op alias)")
 endif()
 
-# Optional: load JULIA.COM directly (skip the shell). Animated 16-color
-# Julia set, 30 frames around a circle of c.
+# Boot directly into JULIA.COM (sectors 15..17): animated 16-color Julia set.
 #   idf.py build -DESPDOS_LOADER_JULIA=1
 if(ESPDOS_LOADER_JULIA)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE ESPDOS_LOADER_JULIA=1)
-    message(STATUS "espdos: building with JULIA.COM loader "
-                   "(default is MANDEL.COM)")
+    message(STATUS "espdos: building with JULIA.COM loader (skips SHELL menu)")
 endif()
 
-# Optional: load LIFE.COM directly (skip the shell). Conway's Life
-# with color cycling per generation, 80 generations.
+# Boot directly into LIFE.COM (sectors 18..19): Conway's Life with color cycling.
 #   idf.py build -DESPDOS_LOADER_LIFE=1
 if(ESPDOS_LOADER_LIFE)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE ESPDOS_LOADER_LIFE=1)
-    message(STATUS "espdos: building with LIFE.COM loader "
-                   "(default is MANDEL.COM)")
+    message(STATUS "espdos: building with LIFE.COM loader (skips SHELL menu)")
 endif()
 
 # Optional: pre-feed an extra keystroke to BIOSIN after the date.
