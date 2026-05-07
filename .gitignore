@@ -10,6 +10,11 @@ firmware/build/
 firmware/sdkconfig.old
 firmware/qemu_*.log
 firmware/qemu_*.bin
+firmware/build_*.log
+
+# One-shot helpers (regenerate committed headers; do not commit the
+# script itself, only its output).
+tools/extract_spleen_6x8.py
 
 # IDE / editor
 .vscode/

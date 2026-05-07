@@ -1,7 +1,11 @@
 # espDos
 
 Tim Paterson's actual MS-DOS 1.0 (1981), running unmodified on a $20
-ESP32-S3 dev board.
+ESP32 dev board. Two targets supported today: the **LilyGO T-Display-S3**
+(USB-Serial-JTAG console only) and the **LilyGO T-Dongle-C5** (the same
+console *plus* an onboard 0.96" ST7735 LCD that mirrors output as a
+status bar and an 80-column subpixel-rendered scrolling log — true DOS
+column count on a 160-pixel display).
 
 The kernel binary is built straight from `86DOS.ASM` — Paterson's own SCP
 listings, mechanically translated to NASM by `asm/scp_to_nasm.py`. It runs
@@ -125,52 +129,109 @@ After any of the children does `INT 20h`, control returns to SHELL
 
 ## What you need
 
-- **LilyGO T-Display-S3** (ESP32-S3 with 8 MB octal PSRAM, 16 MB flash).
-  The OLED isn't wired up on this particular board, so all I/O goes
-  through USB-Serial-JTAG.
-- **ESP-IDF v5.4.1** (older versions don't ship the right NASM / esp_psram
-  configuration; `~/esp/v5.4.1/esp-idf/export.ps1` on Windows).
-- **NASM** for assembling the kernel and transients.
-- **Python 3** (use `py` on Windows) for the FAT12 image builder.
+**Board** — pick one:
+
+- **LilyGO T-Display-S3** (ESP32-S3, 8 MB octal PSRAM, 16 MB flash).
+  The OLED isn't wired up on this board, so all I/O goes through
+  USB-Serial-JTAG.
+- **LilyGO T-Dongle-C5** (ESP32-C5, 8 MB quad PSRAM, 16 MB flash, 0.96"
+  ST7735 LCD). USB-Serial-JTAG console *plus* the LCD mirrors BIOS
+  output as a status bar + 80-col subpixel-rendered log.
+
+**Toolchain** (same for both targets):
+
+- **ESP-IDF v6.0.1** — install via the new IDF Installation Manager
+  (defaults to `C:\esp\v6.0.1\esp-idf\` on Windows; source `export.ps1`
+  before invoking `idf.py`). v5.4.x will not work — the C5 target,
+  Picolibc, the new component graph, and the warnings-as-errors default
+  all want v6.x.
+- **NASM** for assembling the kernel and transients (Windows: `scoop
+  install nasm`).
+- **Python 3** (use `python`, not `py` — the Windows Python launcher
+  often misbehaves on Scoop-managed Python).
 - **MinGW-w64 GCC** for the host test suite.
+- **Paterson-Listings** is now a submodule. Clone with
+  `--recurse-submodules` or run `git submodule update --init` after
+  a plain clone — `asm/build_kernel.sh` reads `86DOS.ASM` from there.
 - *(optional)* **QEMU 9.2.2** with octal PSRAM support
   (`esp-develop-9.2.2-20260417`) for fast iteration without flashing —
-  see `docs/integrity.md` for the recipe and the binary URL.
+  see `docs/testing.md`.
 
 ## Build and flash
 
-```powershell
-# Build the kernel + boot stub + every transient + the FAT12 disk image.
-bash asm/build_kernel.sh
-py tools/build_disk.py build/disk.img
+Step 1 — build the kernel image (target-agnostic). Run once after a
+fresh clone or any time you edit something under `asm/`:
 
-# Build the firmware. Default loads MANDEL directly. Pick another
-# program with -DESPDOS_LOADER_<NAME>=1 (HELLO, COUNT, MANDEL, JULIA,
-# or SHELL).
-cd firmware
-C:\Users\zombo\esp\v5.4.1\esp-idf\export.ps1
-idf.py fullclean
-idf.py build -DESPDOS_LOADER_SHELL=1
-idf.py flash monitor
+```bash
+bash asm/build_kernel.sh
+python tools/build_disk.py build/disk.img
 ```
 
-Inside `idf.py monitor`:
+Step 2 — build the firmware. ESP-IDF picks the per-target overlay
+(`firmware/sdkconfig.defaults.esp32{s3,c5}`) automatically based on
+`set-target`.
 
-- Boot log → kernel banner → date prompt (auto-fed `1-1-80`) → SHELL menu
-- Type `1`/`2`/`3`/`4` and Enter to launch; `q` to halt
-- After a child program returns, SHELL re-enters and the menu reprints
-- `Ctrl-]` exits the monitor; `Ctrl-T Ctrl-R` resets the board
+```powershell
+& 'C:\esp\v6.0.1\esp-idf\export.ps1'
+cd C:\Users\zombo\Desktop\Programming\espDos\firmware
+
+# T-Display-S3:
+idf.py set-target esp32s3
+idf.py fullclean
+idf.py build flash monitor
+
+# OR T-Dongle-C5 (different USB device — pick the right COM port):
+idf.py set-target esp32c5
+idf.py fullclean
+idf.py build flash monitor
+```
+
+The default boot is **SHELL.COM** — interactive menu over USB-Serial-JTAG.
+Type `1`-`5` to launch HELLO / COUNT / MANDEL / JULIA / LIFE; after each
+child returns via `INT 20h`, SHELL reprints the menu. `q` halts cleanly.
+
+`Ctrl-]` exits the monitor; `Ctrl-T Ctrl-R` resets the board.
+
+## What the C5 LCD shows
+
+In landscape (160 × 80) — top row is a sharp 26-col status bar (program
+name + heartbeat counter), the rest is an 80-col subpixel log. ANSI
+escapes are stripped before rendering so the log shows clean text;
+the USB-Serial-JTAG side still gets the full ANSI stream so JULIA and
+LIFE animate correctly there. Glyphs use Bowman/ClearType-style
+subpixel rendering — color fringes on edges are expected, that's how
+80 columns fit on 160 pixels.
+
+```
++-----------------------------------------------------+
+| SHELL.COM       b00012345                           |  <- sharp 26-col status bar
++-----------------------------------------------------+
+| 86-DOS version 1.00                                 |  <- 80-col subpixel log
+| Copyright 1980,81 Seattle Computer Products, Inc.   |     (color fringes on glyph
+| Enter today's date (m-d-y): 1-1-80                  |      edges expected — that's
+|                                                     |      the subpixel rendering
+| espDos shell                                        |      working)
+|   1) HELLO   - banner                               |
+|   2) COUNT   - 1..50                                |
+|   3) MANDEL  - ASCII fractal                        |
+|   4) JULIA   - color animated set                   |
++-----------------------------------------------------+
+```
+
+Toggle off with `idf.py menuconfig` → "espDos display" → uncheck
+"Use subpixel-rendered 80-column log" if you'd rather have crisp
+26-col text without color fringes.
 
 ## Build flags
 
 | Flag                          | Effect                                        |
 |-------------------------------|-----------------------------------------------|
-| `-DESPDOS_LOADER_HELLO=1`     | Boot directly into HELLO.COM                  |
-| `-DESPDOS_LOADER_COUNT=1`     | Boot directly into COUNT.COM                  |
-| `-DESPDOS_LOADER_MANDEL=1` *(default)* | Boot directly into MANDEL.COM        |
-| `-DESPDOS_LOADER_JULIA=1`     | Boot directly into JULIA.COM                  |
-| `-DESPDOS_LOADER_LIFE=1`      | Boot directly into LIFE.COM                   |
-| `-DESPDOS_LOADER_SHELL=1`     | Boot into the interactive menu                |
+| `-DESPDOS_LOADER_HELLO=1`     | Boot directly into HELLO.COM (skip SHELL)     |
+| `-DESPDOS_LOADER_COUNT=1`     | Boot directly into COUNT.COM (skip SHELL)     |
+| `-DESPDOS_LOADER_MANDEL=1`    | Boot directly into MANDEL.COM (skip SHELL)    |
+| `-DESPDOS_LOADER_JULIA=1`     | Boot directly into JULIA.COM (skip SHELL)     |
+| `-DESPDOS_LOADER_LIFE=1`      | Boot directly into LIFE.COM (skip SHELL)      |
+| `-DESPDOS_LOADER_SHELL=1`     | Explicit SHELL.COM (default; flag is a no-op alias) |
 | `-DESPDOS_AUTOPICK=N`         | Pre-feed digit N to SHELL (for QEMU testing)  |
 | `-DESPDOS_INTERACTIVE_DATE=1` | Type the date yourself instead of auto-feed   |
 | `-DESPDOS_LOG_OUT=1`          | Mirror BIOSOUT through `ESP_LOGI` (QEMU debug)|

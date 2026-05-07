@@ -1,5 +1,15 @@
 # ESP32-C5 dual-target with ST7735 status+log mirror — implementation plan
 
+> **Status (2026-05-07):** Tasks 1–12 implemented and committed on branch
+> `c5-dual-target`. Hardware Gates 1, 2, and 3 verified on real T-Display-S3
+> and T-Dongle-C5 hardware. Tasks 13 (Gates 4+5: subpixel calibration +
+> full subpixel verification) and 14 (README C5 subsection) pending. See
+> `docs/c5-progress.md` for the live handoff snapshot, including the
+> things that bit us along the way (waveshare driver bugs, IDF 6.0 Kconfig
+> quirk on C5, active-low backlight). The individual `- [ ]` checkboxes
+> below were not maintained line-by-line — treat the progress doc as the
+> live status.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add the LilyGO T-Dongle-C5 (ESP32-C5) as a second supported target for espDos alongside the existing T-Display-S3, with a status-bar + scrolling-log mirror of BIOS console output on the C5's onboard 0.96" ST7735 LCD using subpixel rendering for full 80-column DOS width.
