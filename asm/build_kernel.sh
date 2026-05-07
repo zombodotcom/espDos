@@ -6,11 +6,24 @@
 set -eu
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SRC="$ROOT/../Paterson-Listings/3_source_code/86-DOS_1.00/86DOS.ASM"
+# Prefer the in-repo submodule (espDos/Paterson-Listings/...). Fall
+# back to a sibling clone (../Paterson-Listings/...) for backwards
+# compat with pre-submodule layouts.
+if [ -f "$ROOT/Paterson-Listings/3_source_code/86-DOS_1.00/86DOS.ASM" ]; then
+    SRC="$ROOT/Paterson-Listings/3_source_code/86-DOS_1.00/86DOS.ASM"
+else
+    SRC="$ROOT/../Paterson-Listings/3_source_code/86-DOS_1.00/86DOS.ASM"
+fi
 OUT_DIR="$ROOT/build"
 mkdir -p "$OUT_DIR"
 
-[ -f "$SRC" ] || { echo "Source not found: $SRC" >&2; exit 1; }
+[ -f "$SRC" ] || {
+    echo "Source not found at either:" >&2
+    echo "  $ROOT/Paterson-Listings/3_source_code/86-DOS_1.00/86DOS.ASM" >&2
+    echo "  $ROOT/../Paterson-Listings/3_source_code/86-DOS_1.00/86DOS.ASM" >&2
+    echo "Run: git submodule update --init Paterson-Listings" >&2
+    exit 1
+}
 
 # Find a working python interpreter. On Windows the `python` command
 # is often a Microsoft Store alias that prints a help banner instead

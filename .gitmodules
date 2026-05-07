@@ -1,0 +1,3 @@
+[submodule "Paterson-Listings"]
+	path = Paterson-Listings
+	url = https://github.com/DOS-History/Paterson-Listings.git
