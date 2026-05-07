@@ -51,6 +51,15 @@ if(ESPDOS_LOADER_JULIA)
                    "(default is MANDEL.COM)")
 endif()
 
+# Optional: load LIFE.COM directly (skip the shell). Conway's Life
+# with color cycling per generation, 80 generations.
+#   idf.py build -DESPDOS_LOADER_LIFE=1
+if(ESPDOS_LOADER_LIFE)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE ESPDOS_LOADER_LIFE=1)
+    message(STATUS "espdos: building with LIFE.COM loader "
+                   "(default is MANDEL.COM)")
+endif()
+
 # Optional: pre-feed an extra keystroke to BIOSIN after the date.
 # Used by SHELL.COM in QEMU mode (no interactive terminal); pass
 # the digit as the value, e.g. -DESPDOS_AUTOPICK=3 to launch MANDEL.

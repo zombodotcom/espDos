@@ -32,4 +32,7 @@ idf_component_register(
         # Julia-loader variant. Loads JULIA.COM (3 sectors starting at
         # sector 15). Selected via -DESPDOS_LOADER_JULIA=1.
         "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/bootstub_julia.bin"
+        # Life-loader variant. Loads LIFE.COM (2 sectors starting at
+        # sector 18). Selected via -DESPDOS_LOADER_LIFE=1.
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/bootstub_life.bin"
 )

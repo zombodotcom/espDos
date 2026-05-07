@@ -122,6 +122,9 @@ void app_main(void)
 #elif defined(ESPDOS_LOADER_JULIA)
     extern const uint8_t bootstub_bin_start[] asm("_binary_bootstub_julia_bin_start");
     extern const uint8_t bootstub_bin_end[]   asm("_binary_bootstub_julia_bin_end");
+#elif defined(ESPDOS_LOADER_LIFE)
+    extern const uint8_t bootstub_bin_start[] asm("_binary_bootstub_life_bin_start");
+    extern const uint8_t bootstub_bin_end[]   asm("_binary_bootstub_life_bin_end");
 #else
     extern const uint8_t bootstub_bin_start[] asm("_binary_bootstub_mandel_bin_start");
     extern const uint8_t bootstub_bin_end[]   asm("_binary_bootstub_mandel_bin_end");
@@ -162,16 +165,22 @@ void app_main(void)
     ESP_LOGI(TAG, "running MEMSCAN... (~650K instructions to scan 1 MB)");
 
     /* Run the emulator in 5000-instruction beats with a FreeRTOS yield
-     * between, so the IDLE task can pet the watchdog. Per-beat heartbeat
-     * logging was useful while chasing emulator bugs and is now silent;
-     * rebuild with -DESPDOS_HEARTBEAT=1 to bring it back. */
-    for (int beat = 0; beat < 2000; beat++) {
+     * between, so the IDLE task can pet the watchdog. No upper bound:
+     * the shell loop, animated transients, and any long-running
+     * program are all expected to exceed any fixed budget, and the
+     * emulator only legitimately stops when something jumps to
+     * CS:IP = 0:0 (the bootstub halt loop falls through to that
+     * after a final `int 20h` from the user-quit path). Rebuild
+     * with -DESPDOS_HEARTBEAT=1 to log every beat for debugging. */
+    int beat = 0;
+    for (;;) {
         int still_running = emu_run_n(5000);
 #ifdef ESPDOS_HEARTBEAT
         ESP_LOGI(TAG, "heartbeat %d: %d steps  CS:IP=%04x:%04x  AX=%04x",
                  beat, (beat + 1) * 5000,
                  emu_get_cs(), emu_get_ip(), emu_get_ax());
 #endif
+        beat++;
         if (!still_running) {
             ESP_LOGI(TAG, "----- emulator halted (CS:IP=0:0) -----");
             break;

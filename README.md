@@ -10,7 +10,7 @@ shim that traps far-calls to `BIOSSEG` (0x0040) for console + disk, and
 loads its own `.COM` files off a FAT12 image flashed into a partition.
 
 It boots, prints the original banner, accepts the date prompt, and
-hands control to whichever transient you picked. Five ship today:
+hands control to whichever transient you picked. Six ship today:
 
 | Program     | Bytes | What it does                                      |
 |-------------|------:|---------------------------------------------------|
@@ -18,7 +18,8 @@ hands control to whichever transient you picked. Five ship today:
 | `COUNT.COM` |    71 | Prints 1..50 in decimal (AAM / DIV demo)          |
 | `MANDEL.COM`|   450 | Q4.12 fixed-point ASCII Mandelbrot, 78×24         |
 | `JULIA.COM` |  1082 | 16-color animated Julia set, c walks a circle    |
-| `SHELL.COM` |   393 | Interactive menu; re-entry on `INT 20h` from kids |
+| `LIFE.COM`  |  1029 | Conway's Game of Life, 80 generations, colored   |
+| `SHELL.COM` |   443 | Interactive menu; re-entry on `INT 20h` from kids |
 
 Everything happens inside the unmodified 86-DOS kernel — `INT 21h`, the
 1981 DISPATCH table, the original FAT12 file ops. The shell is itself
@@ -71,6 +72,7 @@ Inside `idf.py monitor`:
 | `-DESPDOS_LOADER_COUNT=1`     | Boot directly into COUNT.COM                  |
 | `-DESPDOS_LOADER_MANDEL=1` *(default)* | Boot directly into MANDEL.COM        |
 | `-DESPDOS_LOADER_JULIA=1`     | Boot directly into JULIA.COM                  |
+| `-DESPDOS_LOADER_LIFE=1`      | Boot directly into LIFE.COM                   |
 | `-DESPDOS_LOADER_SHELL=1`     | Boot into the interactive menu                |
 | `-DESPDOS_AUTOPICK=N`         | Pre-feed digit N to SHELL (for QEMU testing)  |
 | `-DESPDOS_INTERACTIVE_DATE=1` | Type the date yourself instead of auto-feed   |

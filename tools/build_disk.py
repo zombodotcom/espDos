@@ -60,6 +60,7 @@ FILES = [
     ("COUNT   ", "COM", "build/count.bin"),
     ("SHELL   ", "COM", "build/shell.bin"),
     ("JULIA   ", "COM", "build/julia.bin"),
+    ("LIFE    ", "COM", "build/life.bin"),
 ]
 
 

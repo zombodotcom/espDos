@@ -194,6 +194,41 @@ nasm -f bin \
 rm -f "$OUT_DIR/bootstub_julia.asm.tmp"
 echo "Built: $OUT_DIR/bootstub_julia.bin ($(wc -c < "$OUT_DIR/bootstub_julia.bin") bytes)"
 
+# Transient LIFE.COM — Conway's Game of Life with color cycling.
+# Cluster 7 (sectors 18..19 — ~1KB so 2 sectors). Same toroidal
+# 78x24 grid as the other ASCII transients. Generations animate via
+# ESC[H frame separator.
+nasm -f bin \
+     -o "$OUT_DIR/life.bin" \
+     -l "$OUT_DIR/life.lst" \
+     "$SCRIPT_DIR/life.asm"
+echo "Built: $OUT_DIR/life.bin ($(wc -c < "$OUT_DIR/life.bin") bytes)"
+
+LIFE_SECTOR=18
+LIFE_COUNT=2
+nasm -f bin \
+     -D"LOADER_OFFSET=$LOADER_OFF" \
+     -D"LOAD_SECTOR=$LIFE_SECTOR" \
+     -D"LOAD_COUNT=$LIFE_COUNT" \
+     -o "$OUT_DIR/loader_life.bin" \
+     -l "$OUT_DIR/loader_life.lst" \
+     "$SCRIPT_DIR/loader.asm"
+echo "Built: $OUT_DIR/loader_life.bin ($(wc -c < "$OUT_DIR/loader_life.bin") bytes) " \
+     "[LOAD_SECTOR=$LIFE_SECTOR LOAD_COUNT=$LIFE_COUNT]"
+
+cp "$SCRIPT_DIR/bootstub.asm" "$OUT_DIR/bootstub_life.asm.tmp"
+sed -i 's|build/loader.bin|build/loader_life.bin|' "$OUT_DIR/bootstub_life.asm.tmp"
+nasm -f bin \
+     -D"KERNEL_SEG=$KSEG" \
+     -D"KERNEL_OFFSET=$KOFF" \
+     -D"LOADER_OFFSET=$LOADER_OFF" \
+     -i "$ROOT/" \
+     -o "$OUT_DIR/bootstub_life.bin" \
+     -l "$OUT_DIR/bootstub_life.lst" \
+     "$OUT_DIR/bootstub_life.asm.tmp"
+rm -f "$OUT_DIR/bootstub_life.asm.tmp"
+echo "Built: $OUT_DIR/bootstub_life.bin ($(wc -c < "$OUT_DIR/bootstub_life.bin") bytes)"
+
 # Transient SHELL.COM — interactive program selector. Cluster 5
 # (sector 14). When loaded by bootstub_shell.bin, prints a menu and
 # dispatches to HELLO/COUNT/MANDEL based on a single keystroke.

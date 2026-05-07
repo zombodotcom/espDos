@@ -31,6 +31,7 @@ HELLO_SECTOR    equ 11
 MANDEL_SECTOR   equ 12
 COUNT_SECTOR    equ 13
 JULIA_SECTOR    equ 15           ; cluster 6, spans 3 sectors
+LIFE_SECTOR     equ 18           ; cluster 7, spans 2 sectors
 
 INT20_VEC       equ 0x20*4
 
@@ -82,6 +83,8 @@ prompt:
     je   pick_mandel
     cmp  al, '4'
     je   pick_julia
+    cmp  al, '5'
+    je   pick_life
     jmp  quit
 
 pick_hello:
@@ -99,6 +102,10 @@ pick_mandel:
 pick_julia:
     mov  dx, JULIA_SECTOR
     mov  cx, 3                   ; julia.bin = 1082 bytes -> 3 sectors
+    jmp  load_and_run
+pick_life:
+    mov  dx, LIFE_SECTOR
+    mov  cx, 2                   ; life.bin ~1KB -> 2 sectors
 
 load_and_run:
     ; Save SP so on_child_exit can switch back to our stack.
@@ -178,6 +185,7 @@ menu:
     db '  2) COUNT   - 1..50', 0x0D, 0x0A
     db '  3) MANDEL  - ASCII fractal', 0x0D, 0x0A
     db '  4) JULIA   - color animated set', 0x0D, 0x0A
+    db '  5) LIFE    - Conways Game of Life', 0x0D, 0x0A
     db '  q) quit', 0x0D, 0x0A
     db '> $'
 
