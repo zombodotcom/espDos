@@ -13,3 +13,13 @@ CONFIG_SPIRAM_MODE_QUAD=y
 # menuconfig to fall back to sharp 26-col mode.
 CONFIG_ESPDOS_HAS_DISPLAY=y
 CONFIG_ESPDOS_DISPLAY_SUBPIXEL=y
+
+# IDF 6.0.1 quirk: the C5's auto-generated Kconfig.soc_caps.in declares
+# SOC_USB_SERIAL_JTAG_SUPPORTED with `default y`, but the value isn't
+# making it into the resolved sdkconfig (only 199 of 332 SOC caps
+# survive — Kconfig parser quirk specific to this IDF release on C5).
+# esp_driver_usb_serial_jtag's CMakeLists.txt gates its sources on
+# this symbol, so without it the driver compiles to an empty library
+# and bios.c's usb_serial_jtag_write_bytes() call fails to link.
+# Force the symbol on. Remove this when IDF 6.0.x picks it up natively.
+CONFIG_SOC_USB_SERIAL_JTAG_SUPPORTED=y

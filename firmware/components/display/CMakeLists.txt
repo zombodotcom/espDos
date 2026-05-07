@@ -14,7 +14,6 @@ if(CONFIG_ESPDOS_HAS_DISPLAY)
         "render_sharp.c"
         "render_subpixel.c"
         "st7735_panel.c"
-        "esp_lcd_st7735_vendor.c"
     )
 else()
     set(srcs)
@@ -23,8 +22,14 @@ endif()
 idf_component_register(
     SRCS ${srcs}
     INCLUDE_DIRS "include"
-    # esp_lcd, driver, freertos are private (not exposed in display.h).
-    # log is also private; display.h only exposes esp_err_t which comes
-    # from esp_common (auto-required by IDF for every component).
-    PRIV_REQUIRES esp_lcd driver log freertos
+    # st7735_panel.c uses spi_master + gpio directly (ported from
+    # LilyGO's Adafruit_ST7735), no esp_lcd dependency. IDF 6.0
+    # split the old monolithic `driver` component into per-peripheral
+    # esp_driver_* components, so we list them explicitly:
+    #   - esp_driver_spi: spi_bus_initialize, spi_device_polling_transmit
+    #   - esp_driver_gpio: gpio_config, gpio_set_level
+    # log: ESP_LOGI / ESP_RETURN_ON_ERROR.
+    # freertos: vTaskDelay + xTimerCreate (display.c).
+    # esp_err_t comes from esp_common, auto-required.
+    PRIV_REQUIRES esp_driver_spi esp_driver_gpio log freertos
 )

@@ -1,0 +1,19 @@
+## Workaround: in ESP-IDF 6.0.1 on ESP32-C5, the root Kconfig's
+##     orsource "./components/soc/$IDF_TARGET/include/soc/Kconfig.soc_caps.in"
+## doesn't propagate ~133 of the 332 SOC_* capabilities into the
+## resolved sdkconfig. SOC_USB_SERIAL_JTAG_SUPPORTED is one of them,
+## which causes esp_driver_usb_serial_jtag's CMakeLists to skip its
+## source files (gated on `if(CONFIG_SOC_USB_SERIAL_JTAG_SUPPORTED)`).
+## bios.c then fails to link with `usb_serial_jtag_write_bytes` undefined.
+##
+## We re-declare the missing SOC_* configs we depend on here, with
+## the same `default y if IDF_TARGET_ESP32C5` semantics. Kconfig
+## merges the declarations: the upstream Kconfig.soc_caps.in still
+## owns the canonical declaration on chips where it's properly
+## sourced (S3, etc.); on C5 our declaration provides the value.
+##
+## Remove this file when upstream IDF fixes the missing orsource on C5.
+
+config SOC_USB_SERIAL_JTAG_SUPPORTED
+    bool
+    default y if IDF_TARGET_ESP32C5
