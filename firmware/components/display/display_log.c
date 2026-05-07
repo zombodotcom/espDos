@@ -1,4 +1,5 @@
 #include "display_internal.h"
+#include "font_6x8.h"  /* used by render_*.c; included here so the build exercises the header */
 
 /* Implementations land in Tasks 6 and 7. */
 
