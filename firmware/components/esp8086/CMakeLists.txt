@@ -30,14 +30,17 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
 # rejects. These are intentional in the upstream design (Adrian Cable
 # went for minimum source size), not bugs. Relax just for this
 # component. Note: NO -fsigned-char — esp8086.c is signedness-agnostic
-# by construction.
+# by construction. The CAST macro violates strict-aliasing but is safe
+# in this context (memcpy-like behavior).
 target_compile_options(${COMPONENT_LIB} PRIVATE
     -Wno-error=unused-value
     -Wno-error=parentheses
     -Wno-error=implicit-fallthrough
     -Wno-error=logical-not-parentheses
+    -Wno-error=strict-aliasing
     -Wno-unused-value
     -Wno-parentheses
     -Wno-implicit-fallthrough
     -Wno-logical-not-parentheses
+    -Wno-strict-aliasing
 )
