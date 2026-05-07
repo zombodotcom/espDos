@@ -1,32 +1,23 @@
-# espdos default sdkconfig.
-#
-# Target: ESP32-S3 (LilyGO T-Display-S3 has 8MB PSRAM, 16MB flash).
-# 8086tiny needs ~1.1 MB for its emulated 8086 RAM, which is far more
-# than the S3's 512KB internal DRAM. We allocate it from PSRAM.
+# espdos shared sdkconfig defaults.
+# Per-target overlays in sdkconfig.defaults.esp32{s3,c5} pick PSRAM
+# mode and display enablement.
 
-CONFIG_IDF_TARGET="esp32s3"
-
-# Performance: -O2 + 240 MHz CPU. The 8086 interpreter loop in
-# esp8086.c is the hot path for every transient, and it benefits
-# 2-2.5x from -O2 inlining + jump-threading the 256-way opcode
-# switch. The S3 supports 240 MHz at no additional power cost worth
-# worrying about for this demo.
+# Performance: -O2 + 240 MHz CPU. Both S3 and C5 support 240 MHz.
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
 
-# Enable PSRAM. Octal mode (8-line) is the T-Display-S3 default.
+# Enable PSRAM. Mode (octal vs quad) is set by the target overlay.
 CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_TYPE_AUTO=y
 CONFIG_SPIRAM_SPEED_80M=y
 
 # Allow heap_caps_malloc(MALLOC_CAP_SPIRAM, ...) at runtime.
 CONFIG_SPIRAM_USE_MALLOC=y
 
-# Allow EXT_RAM_BSS_ATTR-tagged statics (e.g., esp8086.c's mem[]) to
-# land in PSRAM. Without this, EXT_RAM_BSS_ATTR silently does nothing
-# and the 1 MB mem[] array tries to fit in internal DRAM, which fails.
+# Allow EXT_RAM_BSS_ATTR-tagged statics (esp8086.c's mem[]) to land in
+# PSRAM. Without this, EXT_RAM_BSS_ATTR silently does nothing and the
+# 1 MB mem[] array tries to fit in internal DRAM, which fails.
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 
 # Don't fail to boot if PSRAM init fails (QEMU may differ from real chip).
@@ -35,13 +26,12 @@ CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 # Larger main task stack — emulator-driven workloads may want it.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
-# 16 MB flash — T-Display-S3 default. Default sdkconfig says 2 MB,
+# 16 MB flash on both LilyGO boards. Default sdkconfig says 2 MB,
 # which can't hold the 3 MB factory app + dos_disk partition.
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 
-# Custom partition table — adds the dos_disk partition that holds the
-# FAT12 floppy image the 86-DOS kernel reads through bios_read/write.
+# Custom partition table (adds dos_disk for the FAT12 floppy image).
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"

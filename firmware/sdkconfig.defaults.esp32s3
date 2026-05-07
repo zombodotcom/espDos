@@ -1,0 +1,11 @@
+# S3-specific overlay for sdkconfig.defaults.
+# Loaded automatically by `idf.py set-target esp32s3`.
+
+CONFIG_IDF_TARGET="esp32s3"
+
+# Octal PSRAM: T-Display-S3 default. C5 cannot do octal — it uses quad
+# (see sdkconfig.defaults.esp32c5).
+CONFIG_SPIRAM_MODE_OCT=y
+
+# Display is not wired up on the T-Display-S3 in espDos. Compiles out.
+CONFIG_ESPDOS_HAS_DISPLAY=n
