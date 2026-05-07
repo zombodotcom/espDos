@@ -10,6 +10,9 @@
 EMU_SRC := ../../firmware/components/esp8086/esp8086.c
 BIOS    := ../../third_party/8086tiny/bios.bin
 
+DISPLAY_LOG := ../../firmware/components/display/display_log.c
+DISPLAY_INC := -I../../firmware/components/display/include
+
 CFLAGS := -std=c99 -Wall \
           -DEMU_LIBRARY_MODE=1 \
           -DNO_GRAPHICS=1 \
@@ -20,7 +23,8 @@ CFLAGS := -std=c99 -Wall \
 TESTS := test_jmp_near.exe test_kernel_first_step.exe test_bootstub.exe \
         test_hello.exe test_kernel_banner.exe test_memory_bounds.exe \
         test_fininit_stack.exe test_loader.exe test_mandel.exe \
-        test_julia.exe
+        test_julia.exe \
+        test_display_ansi_strip.exe
 
 all: $(TESTS)
 
@@ -54,6 +58,9 @@ test_mandel.exe: test_mandel.c $(EMU_SRC) test_helpers.c
 test_julia.exe: test_julia.c $(EMU_SRC) test_helpers.c
 	gcc $(CFLAGS) $^ -o $@
 
+test_display_ansi_strip.exe: test_display_ansi_strip.c $(DISPLAY_LOG)
+	gcc $(CFLAGS) $(DISPLAY_INC) $^ -o $@
+
 run: all
 	@echo === test_jmp_near ===
 	@./test_jmp_near.exe ; echo "exit=$$?"
@@ -75,6 +82,8 @@ run: all
 	@./test_mandel.exe ; echo "exit=$$?"
 	@echo === test_julia ===
 	@./test_julia.exe ; echo "exit=$$?"
+	@echo === test_display_ansi_strip ===
+	@./test_display_ansi_strip.exe ; echo "exit=$$?"
 
 clean:
 	rm -f *.exe
