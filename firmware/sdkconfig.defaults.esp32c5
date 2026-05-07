@@ -1,0 +1,15 @@
+# C5-specific overlay for sdkconfig.defaults.
+# Loaded automatically by `idf.py set-target esp32c5`.
+
+CONFIG_IDF_TARGET="esp32c5"
+
+# Quad SPI PSRAM. ESP32-C5 silicon only supports quad (no octal mode
+# like S3). Pin assignments are chip defaults; the LilyGO T-Dongle-C5
+# uses the standard quad SPI psram pinout.
+CONFIG_SPIRAM_MODE_QUAD=y
+
+# Display is wired on T-Dongle-C5 (ST7735 over SPI2, GPIO 0/1/2/3/6/10).
+# Subpixel rendering on by default; flip ESPDOS_DISPLAY_SUBPIXEL=n in
+# menuconfig to fall back to sharp 26-col mode.
+CONFIG_ESPDOS_HAS_DISPLAY=y
+CONFIG_ESPDOS_DISPLAY_SUBPIXEL=y
