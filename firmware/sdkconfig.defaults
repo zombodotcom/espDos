@@ -15,6 +15,11 @@ CONFIG_SPIRAM_SPEED_80M=y
 # Allow heap_caps_malloc(MALLOC_CAP_SPIRAM, ...) at runtime.
 CONFIG_SPIRAM_USE_MALLOC=y
 
+# Allow EXT_RAM_BSS_ATTR-tagged statics (e.g., esp8086.c's mem[]) to
+# land in PSRAM. Without this, EXT_RAM_BSS_ATTR silently does nothing
+# and the 1 MB mem[] array tries to fit in internal DRAM, which fails.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
 # Don't fail to boot if PSRAM init fails (QEMU may differ from real chip).
 CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 

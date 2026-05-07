@@ -2,7 +2,7 @@
  * espdos — main.
  *
  * Plan 1: ESP-IDF + QEMU pipeline working (banner over UART).
- * Plan 2a (here): emu8086 + kernel_blob components link cleanly.
+ * Plan 2a (here): esp8086 + kernel_blob components link cleanly.
  * Plan 2b: lift 8086tiny step API and actually run kernel instructions.
  */
 
@@ -13,7 +13,7 @@
 #include "esp_log.h"
 #include "esp_chip_info.h"
 
-#include "emu8086.h"
+#include "esp8086.h"
 #include "kernel_blob.h"
 #include "bios.h"
 
@@ -48,7 +48,7 @@ void app_main(void)
      * embedded with the expected content. */
     size_t klen = kernel_blob_size();
     ESP_LOGI(TAG, "kernel_blob: %zu bytes embedded "
-                  "(expecting ~5861 from 86DOS.ASM)", klen);
+                  "(expecting ~6341 from 86DOS.ASM after R13b expansion)", klen);
     hex_dump_first("kernel[0..15]", kernel_bin_start, 16);
 
     /* Install UART driver so bios_in / bios_out can read+write
@@ -56,13 +56,14 @@ void app_main(void)
      * fires when the kernel blocks on input). */
     bios_init();
 
-    /* Allocate the emulator's 320 KB memory from PSRAM/DRAM. */
+    /* Wire up regs8/regs16 pointers into esp8086's static mem[]
+     * (1 MB + 64 KB margin, in PSRAM via EXT_RAM_BSS_ATTR). */
     esp_err_t err = emu_alloc_mem();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "emu_alloc_mem failed: %s", esp_err_to_name(err));
         goto idle;
     }
-    ESP_LOGI(TAG, "emu8086 ram: %zu bytes at %p", emu_ram_size(),
+    ESP_LOGI(TAG, "esp8086 ram: %zu bytes at %p", emu_ram_size(),
              (void *)emu_mem());
 
     /* Plan 2b: load 8086tiny BIOS at REGS_BASE+0x100 (segment 0x4000,
@@ -77,9 +78,11 @@ void app_main(void)
 
     /* Verify BIOS landed at the right place. */
     uint8_t *m = emu_mem();
-    ESP_LOGI(TAG, "mem[0x20100..0x20107] = %02x %02x %02x %02x %02x %02x %02x %02x",
-             m[0x20100], m[0x20101], m[0x20102], m[0x20103],
-             m[0x20104], m[0x20105], m[0x20106], m[0x20107]);
+    uint32_t bios_phys = ((uint32_t)EMU_BIOS_SEG << 4) + EMU_BIOS_OFFSET;
+    ESP_LOGI(TAG, "mem[BIOS..BIOS+7] @ 0x%05lx = %02x %02x %02x %02x %02x %02x %02x %02x",
+             (unsigned long)bios_phys,
+             m[bios_phys + 0], m[bios_phys + 1], m[bios_phys + 2], m[bios_phys + 3],
+             m[bios_phys + 4], m[bios_phys + 5], m[bios_phys + 6], m[bios_phys + 7]);
 
     emu_load_bios_tables();
     /* Spot-check populated tables for opcode 0xE9 (JMP near).
@@ -102,8 +105,24 @@ void app_main(void)
      *   - JMP FAR to KERNEL_SEG:KERNEL_OFFSET
      * Without the DPB, NUMDRV ends up zero, no drives get configured,
      * and the kernel's later disk + exit paths corrupt themselves. */
+    /* Use the mandel-loader variant of the bootstub so the demo loads
+     * MANDEL.COM (impressive output) instead of HELLO.COM ("transient
+     * ok"). Both bootstubs are byte-identical except for the embedded
+     * LOAD_SECTOR — see asm/build_kernel.sh for how they're built.
+     * Define ESPDOS_LOADER_HELLO to swap back. */
+#if defined(ESPDOS_LOADER_HELLO)
     extern const uint8_t bootstub_bin_start[] asm("_binary_bootstub_bin_start");
     extern const uint8_t bootstub_bin_end[]   asm("_binary_bootstub_bin_end");
+#elif defined(ESPDOS_LOADER_COUNT)
+    extern const uint8_t bootstub_bin_start[] asm("_binary_bootstub_count_bin_start");
+    extern const uint8_t bootstub_bin_end[]   asm("_binary_bootstub_count_bin_end");
+#elif defined(ESPDOS_LOADER_SHELL)
+    extern const uint8_t bootstub_bin_start[] asm("_binary_bootstub_shell_bin_start");
+    extern const uint8_t bootstub_bin_end[]   asm("_binary_bootstub_shell_bin_end");
+#else
+    extern const uint8_t bootstub_bin_start[] asm("_binary_bootstub_mandel_bin_start");
+    extern const uint8_t bootstub_bin_end[]   asm("_binary_bootstub_mandel_bin_end");
+#endif
     size_t bootstub_len = (size_t)(bootstub_bin_end - bootstub_bin_start);
     ESP_LOGI(TAG, "loading boot stub: %zu bytes at %04x:%04x",
              bootstub_len, EMU_BOOT_SEG, EMU_BOOT_OFFSET);
@@ -129,78 +148,6 @@ void app_main(void)
              kernel_blob_size(), EMU_KERNEL_SEG, EMU_KERNEL_OFFSET);
     emu_load(EMU_KERNEL_SEG, EMU_KERNEL_OFFSET,
              kernel_bin_start, kernel_blob_size());
-
-    /* MEMSCAN short-circuit patch.
-     *
-     * 86DOS.ASM line 3473-3483 walks segments writing-and-verifying
-     * a probe byte to discover where RAM ends. On a real 8086 with
-     * fewer than 1 MB installed, the verify fails at the first
-     * unbacked segment. In our 8086tiny `mem[]` is a static C array
-     * of size RAM_SIZE; writes past it go to neighboring BSS, so
-     * every probe "succeeds" and MEMSCAN runs all 0xFFFF iterations
-     * (≈ 650 000 instructions) before CX wraps. Even when it does
-     * exit, it has corrupted whatever BSS lives just past mem[].
-     *
-     * Patch: at MEMSCAN entry, replace `INC CX; JZ HAVMEM; MOV DS,CX`
-     * (5 bytes) with `MOV CX,0x3000; JMP HAVMEM` (also 5 bytes —
-     * `B9 00 30 EB 0E`). The kernel sees ENDMEM = 0x3000 (= our
-     * RAM_SIZE / 16) and continues to the banner-print code.
-     *
-     * This is brittle (depends on the kernel binary having MEMSCAN
-     * at a specific offset). Located by signature search rather
-     * than hardcoded address, so kernel rebuilds at slightly
-     * different layouts still work. */
-    {
-        uint8_t *km = emu_mem();
-        uint32_t kbase = ((uint32_t)EMU_KERNEL_SEG << 4) + EMU_KERNEL_OFFSET;
-        size_t   ksize = kernel_blob_size();
-
-        /* MEMSCAN signature after the preprocessor's R13b expansion of
-         * the original `JZ HAVMEM` and `JZ MEMSCAN` into `Jnotcc; JMP`
-         * pairs:
-         *   41          INC CX
-         *   75 02       JNZ +2
-         *   EB 12       JMP HAVMEM
-         *   8E D9       MOV DS, CX
-         *   8A 07       MOV AL, [BX]
-         *   F6 D0       NOT AL
-         *   88 07       MOV [BX], AL
-         *   3A 07       CMP AL, [BX]
-         *   F6 D0       NOT AL
-         *   88 07       MOV [BX], AL
-         *   75 02       JNZ +2
-         *   EB E9       JMP MEMSCAN
-         */
-        static const uint8_t sig[] = {
-            0x41, 0x75, 0x02, 0xEB, 0x12, 0x8E, 0xD9, 0x8A, 0x07,
-            0xF6, 0xD0, 0x88, 0x07, 0x3A, 0x07, 0xF6, 0xD0, 0x88,
-            0x07, 0x75, 0x02, 0xEB, 0xE9
-        };
-        size_t found = (size_t)-1;
-        for (size_t i = 0; i + sizeof sig <= ksize; i++) {
-            if (memcmp(&km[kbase + i], sig, sizeof sig) == 0) {
-                found = i; break;
-            }
-        }
-        if (found == (size_t)-1) {
-            ESP_LOGW(TAG, "MEMSCAN signature not found — kernel will spin "
-                          "in MEMSCAN for ~10 seconds");
-        } else {
-            /* Replace the first 5 bytes (INC CX; JNZ +2; JMP HAVMEM)
-             * with `MOV CX, 0x3000; JMP +0x12` — same length, same
-             * fall-through target, but skips all the probe-write logic
-             * and gives the kernel ENDMEM = our RAM_SIZE/16 directly. */
-            uint32_t mp = kbase + found;
-            km[mp + 0] = 0xB9;  /* MOV CX, imm16 */
-            km[mp + 1] = 0x00;
-            km[mp + 2] = 0x30;  /* CX = 0x3000 = RAM_SIZE/16 */
-            km[mp + 3] = 0xEB;  /* JMP rel8 */
-            km[mp + 4] = 0x12;  /* +18 → HAVMEM */
-            ESP_LOGI(TAG, "patched MEMSCAN at offset 0x%04zx (CS:IP=%04x:%04zx) "
-                          "→ ENDMEM=0x3000", found,
-                     EMU_KERNEL_SEG, EMU_KERNEL_OFFSET + found);
-        }
-    }
 #endif
 
     emu_init_state();
@@ -209,29 +156,23 @@ void app_main(void)
     ESP_LOGI(TAG, "running emulator: CS:IP=%04x:%04x  ----- 86-DOS output below -----",
              emu_get_cs(), emu_get_ip());
 
-    uint64_t total_steps = 0;
-    uint16_t prev_ip = emu_get_ip();
-    int      same_ip_count = 0;
-    for (int beat = 0; beat < 200; beat++) {
-        int still_running = emu_run_n(100);
-        total_steps += 100;
-        uint16_t cs = emu_get_cs(), ip = emu_get_ip();
-        ESP_LOGI(TAG, "heartbeat %d: %llu steps  CS:IP=%04x:%04x  AX=%04x",
-                 beat, (unsigned long long)total_steps, cs, ip, emu_get_ax());
+    ESP_LOGI(TAG, "running MEMSCAN... (~650K instructions to scan 1 MB)");
+
+    /* Run the emulator in 5000-instruction beats with a FreeRTOS yield
+     * between, so the IDLE task can pet the watchdog. Per-beat heartbeat
+     * logging was useful while chasing emulator bugs and is now silent;
+     * rebuild with -DESPDOS_HEARTBEAT=1 to bring it back. */
+    for (int beat = 0; beat < 2000; beat++) {
+        int still_running = emu_run_n(5000);
+#ifdef ESPDOS_HEARTBEAT
+        ESP_LOGI(TAG, "heartbeat %d: %d steps  CS:IP=%04x:%04x  AX=%04x",
+                 beat, (beat + 1) * 5000,
+                 emu_get_cs(), emu_get_ip(), emu_get_ax());
+#endif
         if (!still_running) {
             ESP_LOGI(TAG, "----- emulator halted (CS:IP=0:0) -----");
             break;
         }
-        if (ip == prev_ip && cs == emu_get_cs()) {
-            if (++same_ip_count >= 3) {
-                ESP_LOGW(TAG, "IP stuck at %04x:%04x for 3 heartbeats — "
-                              "tight loop or hang", cs, ip);
-                break;
-            }
-        } else {
-            same_ip_count = 0;
-        }
-        prev_ip = ip;
         vTaskDelay(1);
     }
 

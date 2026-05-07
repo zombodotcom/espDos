@@ -40,11 +40,11 @@ void bios_init(void) {
     installed = 1;
 }
 
-/* From 8086tiny.c via emu8086 component. */
+/* From esp8086.c via esp8086 component. */
 extern unsigned char  *regs8;
 extern unsigned short *regs16;
 
-/* 8086tiny register indices (from 8086tiny.c). */
+/* 8086tiny register indices (preserved in our esp8086.c fork). */
 #define REG_AL  0
 #define REG_AH  1
 #define REG_AX  0
@@ -78,8 +78,40 @@ static inline void set_cf(int cf) { regs8[FLAG_CF] = cf ? 1 : 0; }
  * On the T-Display-S3 the USB-C is the JTAG peripheral; reading/
  * writing here puts bytes on the same channel as idf.py monitor. */
 
+/* Auto-feed an initial date string so the user doesn't have to type
+ * 1-1-80 at every boot. 86-DOS 1.0 has no RTC, so the kernel's
+ * DOSINIT prompt loop always fires; this just satisfies the prompt
+ * non-interactively before falling through to real keyboard input
+ * for any subsequent programs that read from the console.
+ *
+ * The kernel's BUFIN handler echoes each character it consumes, so
+ * the prompt line in the monitor will look exactly like the user
+ * typed "1-1-80" and pressed Enter.
+ *
+ * Override at build time with -DESPDOS_INTERACTIVE_DATE=1 if you'd
+ * rather type the date yourself. */
+#ifndef ESPDOS_INTERACTIVE_DATE
+/* Stringify the AUTOPICK digit so we can splice it into the auto-feed
+ * sequence at compile time. The shell reads one char and a CR after
+ * the date prompt is consumed. */
+#ifdef ESPDOS_AUTOPICK
+#  define ESPDOS_STR2(x) #x
+#  define ESPDOS_STR(x)  ESPDOS_STR2(x)
+static const char  bios_autodate[] = "1-1-80\r" ESPDOS_STR(ESPDOS_AUTOPICK) "\r";
+#else
+static const char  bios_autodate[] = "1-1-80\r";
+#endif
+static unsigned    bios_autodate_pos;
+#endif
+
 static uint8_t bios_stat(void) {
-    /* Try a 0-tick read; if it returns 1, push back into our 1-byte
+    /* DO NOT report ready when only auto-feed bytes remain. The
+     * kernel's OUT routine does an "input snoop" on every CONOUT —
+     * if STAT says "ready", it consumes one char from BIOSIN looking
+     * for Ctrl-C/S/P/N. Returning 0xFF here would let the menu print
+     * eat the AUTOPICK digit before SHELL.COM's AH=01 ever runs.
+     *
+     * Try a 0-tick read; if it returns 1, push back into our 1-byte
      * peek buffer so the next bios_in() picks it up. */
     static uint8_t peek;
     static int peek_valid = 0;
@@ -90,6 +122,11 @@ static uint8_t bios_stat(void) {
 }
 
 static uint8_t bios_in(void) {
+#ifndef ESPDOS_INTERACTIVE_DATE
+    if (bios_autodate_pos < sizeof(bios_autodate) - 1) {
+        return (uint8_t)bios_autodate[bios_autodate_pos++];
+    }
+#endif
     extern int  usb_serial_jtag_read_bytes(void *, uint32_t, TickType_t);
     /* Cooperative blocking: 100ms read with retry. JTAG driver yields
      * during the wait, so the watchdog stays satisfied. */
@@ -101,8 +138,38 @@ static uint8_t bios_in(void) {
     }
 }
 
+/* Line-buffer 86-DOS console output through ESP_LOGI so each row of
+ * mandel output appears as one log line on UART0 (and doesn't
+ * interleave with heartbeat ESP_LOGI lines). Buffer is 128 bytes;
+ * \r and \n both flush. Other control bytes < 0x20 are skipped.
+ *
+ * Earlier we suspected this path caused the mandel halt-at-0:0 bug
+ * and reverted to per-byte JTAG writes. The actual bug turned out
+ * to be the KEYBOARD_DRIVER macro in esp8086.c firing pc_interrupt(7)
+ * to a zero IVT entry. With that fixed, line buffering is safe. */
+#define BIOS_OUT_BUF 128
+static char     bios_out_line[BIOS_OUT_BUF];
+static unsigned bios_out_len;
+
+static void bios_out_flush(void) {
+    if (bios_out_len == 0) return;
+    bios_out_line[bios_out_len] = '\0';
+    ESP_LOGI(TAG, "%s", bios_out_line);
+    bios_out_len = 0;
+}
+
 static void bios_out(uint8_t ch) {
-    usb_serial_jtag_write_bytes(&ch, 1, pdMS_TO_TICKS(20));
+    if (ch == '\r' || ch == '\n') {
+        bios_out_flush();
+        return;
+    }
+    if (ch < 0x20) {
+        return;
+    }
+    if (bios_out_len >= BIOS_OUT_BUF - 1) {
+        bios_out_flush();
+    }
+    bios_out_line[bios_out_len++] = (char)ch;
 }
 
 
@@ -146,7 +213,7 @@ static int bios_read(uint8_t drive, uint16_t buf_off, uint16_t count,
     if (off + len > disk_part->size) return 1;
 
     uint32_t buf_phys = ((uint32_t)regs16[REG_DS] << 4) + buf_off;
-    extern unsigned char mem[];   /* defined in 8086tiny.c */
+    extern unsigned char mem[];   /* defined in esp8086.c */
     if (esp_partition_read(disk_part, off, &mem[buf_phys], len) != ESP_OK)
         return 1;
     return 0;
@@ -196,12 +263,15 @@ static void bios_auxout(uint8_t c) { (void)c; }
 
 /* ===== Top-level dispatch: route on the offset within BIOSSEG. ===== */
 
-/* Periodically dump call counts so we can see the call mix without
- * spamming the log on every char. */
+/* Track call counts for debugging. The periodic ESP_LOGI dump used
+ * to fire every 256 calls; it interleaved with program output and
+ * has been silenced. Rebuild with -DESPDOS_HEARTBEAT=1 to bring it
+ * back (the same flag that re-enables the per-beat heartbeat in
+ * espdos.c — both are debug-only). */
 static void maybe_dump_counts(uint16_t ip) {
     int idx = ip / 3;
     if (idx >= 0 && idx < 10) counter[idx]++;
-    /* Print a summary every 256 BIOS calls. */
+#ifdef ESPDOS_HEARTBEAT
     static unsigned total;
     if ((++total & 0xFF) == 0) {
         ESP_LOGI(TAG, "bios calls: stat=%u in=%u out=%u print=%u "
@@ -210,6 +280,7 @@ static void maybe_dump_counts(uint16_t ip) {
                  counter[5], counter[6], counter[7], counter[8],
                  counter[9]);
     }
+#endif
 }
 
 void bios_handle_call(uint16_t ip)

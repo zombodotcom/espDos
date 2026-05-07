@@ -47,7 +47,10 @@ If you just cloned this repo, read in this order:
   + (eventually) `build/dos_host.exe`.
 - ✅ **Task 2: assemble 86DOS.ASM** — `asm/scp_to_nasm.py` translates SCP-ASM
   2.43 dialect to NASM (22 mechanical rules; Tim Paterson's source remains
-  read-only). Output: `build/kernel.bin` (5,861 bytes). Banner string
+  read-only). Output: `build/kernel.bin` (6,341 bytes; about 8% larger
+  than the original 5,861-byte SCP-ASM output, due to rule R13b expanding
+  out-of-range `Jcc rel8` to `Jnotcc + JMP rel16` — see
+  `docs/integrity.md`). Banner string
   "86-DOS" verified at offset 0x1d, "Copyright" at 0x32, first instruction
   is JMP DOSINIT at offset 0x146d. **The kernel assembles cleanly.**
 - ✅ **Task 3: vendor 8086tiny** — Adrian Cable's emulator copied to

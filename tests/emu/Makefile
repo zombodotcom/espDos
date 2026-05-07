@@ -7,7 +7,7 @@
 # and asserts emulator state via the public helpers in 8086tiny.c
 # (emu_run_n, emu_set_cs_ip, emu_get_cs/ip/ax, etc.).
 
-EMU_SRC := ../../firmware/components/emu8086/8086tiny.c
+EMU_SRC := ../../firmware/components/esp8086/esp8086.c
 BIOS    := ../../third_party/8086tiny/bios.bin
 
 CFLAGS := -std=c99 -Wall \
@@ -18,7 +18,8 @@ CFLAGS := -std=c99 -Wall \
           -Wno-unused-variable -Wno-unused-function
 
 TESTS := test_jmp_near.exe test_kernel_first_step.exe test_bootstub.exe \
-        test_hello.exe test_kernel_banner.exe
+        test_hello.exe test_kernel_banner.exe test_memory_bounds.exe \
+        test_fininit_stack.exe test_loader.exe test_mandel.exe
 
 all: $(TESTS)
 
@@ -37,6 +38,18 @@ test_hello.exe: test_hello.c $(EMU_SRC) test_helpers.c
 test_kernel_banner.exe: test_kernel_banner.c $(EMU_SRC) test_helpers.c
 	gcc $(CFLAGS) $^ -o $@
 
+test_memory_bounds.exe: test_memory_bounds.c $(EMU_SRC) test_helpers.c
+	gcc $(CFLAGS) $^ -o $@
+
+test_fininit_stack.exe: test_fininit_stack.c $(EMU_SRC) test_helpers.c
+	gcc $(CFLAGS) $^ -o $@
+
+test_loader.exe: test_loader.c $(EMU_SRC) test_helpers.c
+	gcc $(CFLAGS) $^ -o $@
+
+test_mandel.exe: test_mandel.c $(EMU_SRC) test_helpers.c
+	gcc $(CFLAGS) $^ -o $@
+
 run: all
 	@echo === test_jmp_near ===
 	@./test_jmp_near.exe ; echo "exit=$$?"
@@ -48,6 +61,14 @@ run: all
 	@./test_hello.exe ; echo "exit=$$?"
 	@echo === test_kernel_banner ===
 	@./test_kernel_banner.exe ; echo "exit=$$?"
+	@echo === test_memory_bounds ===
+	@./test_memory_bounds.exe ; echo "exit=$$?"
+	@echo === test_fininit_stack ===
+	@./test_fininit_stack.exe ; echo "exit=$$?"
+	@echo === test_loader ===
+	@./test_loader.exe ; echo "exit=$$?"
+	@echo === test_mandel ===
+	@./test_mandel.exe ; echo "exit=$$?"
 
 clean:
 	rm -f *.exe

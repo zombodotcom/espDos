@@ -5,7 +5,7 @@
 
 /* Pull in the layout constants and emu_* declarations from the
  * firmware header so tests and firmware share one source of truth. */
-#include "../../firmware/components/emu8086/include/emu8086.h"
+#include "../../firmware/components/esp8086/include/esp8086.h"
 
 /* The mem array itself is declared in 8086tiny.c. */
 extern unsigned char mem[];

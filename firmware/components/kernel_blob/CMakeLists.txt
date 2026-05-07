@@ -18,4 +18,15 @@ idf_component_register(
         "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/kernel.bin"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/bootstub.bin"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/hello.bin"
+        # Mandel-loader variant of the boot stub. Same kernel, but the
+        # embedded loader stub hard-codes MANDEL.COM's sector instead of
+        # HELLO.COM's. The firmware (espdos.c) defaults to using this
+        # variant so the on-hardware demo prints the Mandelbrot.
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/bootstub_mandel.bin"
+        # Count-loader variant of the boot stub. Loads COUNT.COM
+        # (sector 13). Selected via -DESPDOS_LOADER_COUNT=1 at build.
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/bootstub_count.bin"
+        # Shell-loader variant. Loads SHELL.COM (sector 14), which
+        # then dispatches to HELLO/COUNT/MANDEL based on a keystroke.
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/bootstub_shell.bin"
 )

@@ -1,10 +1,31 @@
-// 8086tiny: a tiny, highly functional, highly portable PC emulator/VM
-// Copyright 2013-14, Adrian Cable (adrian.cable@gmail.com) - http://www.megalith.co.uk/8086tiny
-//
-// Revision 1.25
-//
-// This work is licensed under the MIT License. See included LICENSE.TXT.
+/*
+ * esp8086 — 8086 instruction interpreter for espDos.
+ *
+ * Derived from Adrian Cable's 8086tiny v1.25 (MIT-licensed, ©2013-14
+ * adrian.cable@gmail.com — http://www.megalith.co.uk/8086tiny). This
+ * fork is also MIT-licensed.
+ *
+ * What's different vs upstream 8086tiny:
+ *   - RAM is 1 MB + 64 KB margin (RAM_SIZE = 0x110000), declared with
+ *     EXT_RAM_BSS_ATTR on ESP_PLATFORM so the firmware build places it
+ *     in PSRAM. The 64 KB margin absorbs the natural seg+off overflow
+ *     that real-mode 8086 code does (max addr = 0xFFFF*16 + 0xFFFF =
+ *     0x10FFEF) without per-access masking. Host builds get plain BSS.
+ *   - REGS_BASE = 0xF0000 (matches upstream). The kernel's MEMSCAN
+ *     walks through it, but each iteration does write-then-restore, so
+ *     register state self-heals.
+ *   - char-signedness independence: every cast that relies on signed
+ *     8-bit sign-extension is written as (int8_t), so the file builds
+ *     correctly under both -fsigned-char (x86) and unsigned char
+ *     (Xtensa-ESP-ELF) — no -fsigned-char compiler crutch needed.
+ *   - SDL audio/video and Win32 conio/io paths removed.
+ *   - emu_run_n / emu_init_state / emu_set_cs_ip / accessors are the
+ *     library-mode entry points (no standalone main()).
+ *   - BIOSSEG (0x0040) trap at the top of the run loop dispatches a
+ *     far call to the bios component instead of executing fake bytes.
+ */
 
+#include <stdint.h>   /* int8_t — used for explicit signed-8-bit casts */
 #include <time.h>
 
 #ifdef ESP_PLATFORM
@@ -47,32 +68,40 @@ static inline int ftime(struct timeb *t) { t->millitm = 0; return 0; }
 #include "SDL.h"
 #endif
 
-// Emulator system constants. PATCH (ESP-IDF): the upstream values
-// (1.06 MB RAM, register file at 0xF0000) don't fit in the S3's 256 KB
-// internal DRAM, and QEMU's S3 model lacks PSRAM. We shrink the layout
-// while preserving 8086tiny's invariant that REGS_BASE is followed by
-// the BIOS image at REGS_BASE+0x100 (the BIOS contains the lookup tables
-// the instruction decoder needs). 8086tiny's `bios` blob is 7,665 bytes,
-// so REGS_BASE+0x1F00 fits comfortably below RAM_SIZE.
-//
-// Layout (192 KB total — fits in S3 internal DRAM after FreeRTOS +
-// other IDF static allocations):
-//   0x00000 - 0x1FFFF   DOS working memory: kernel at seg 0x0100,
-//                       user .COM at seg 0x1000 fills 64KB (128 KB)
-//   0x20000 - 0x2001F   register file (32 bytes at REGS_BASE = seg 0x2000)
-//   0x20100 - 0x21FFF   8086tiny BIOS image (~8 KB, includes lookup tables)
-//   0x22000 - 0x2FFFF   slack
+/* Emulator memory layout (full 8086 address space + margin):
+ *   0x00000 - 0x003FF   IVT (256 vectors × 4 bytes) — kernel-managed
+ *   0x00400 - 0x004FF   BIOS data area
+ *   0x00500 - 0x005FF   bootstub (segment 0x0050)
+ *   0x01000 - 0xEFFFF   DOS user space (kernel at seg 0x0100, MEMSCAN
+ *                       walks up through here; ~960 KB available)
+ *   0xF0000 - 0xF001F   register file (REGS_BASE; 32 bytes)
+ *   0xF0100 - 0xF1EF1   8086tiny BIOS image (~7.6 KB, lookup tables)
+ *   0xFFFFF             top of real-mode 1 MB
+ *   0x100000- 0x10FFEF  margin for natural seg+off overflow
+ *                       (max addr from real seg:off = 0xFFFF*16+0xFFFF)
+ *   0x10FFF0- 0x10FFFF  unused tail (RAM_SIZE rounded up)
+ *
+ * Total: 0x110000 = 1 MB + 64 KB. */
 #ifndef IO_PORT_COUNT
 #define IO_PORT_COUNT 0x10000
 #endif
 #ifndef RAM_SIZE
-#define RAM_SIZE 0x30000   /* 192 KB */
+#define RAM_SIZE 0x110000  /* 1 MB + 64 KB margin */
 #endif
 #ifndef REGS_BASE
-#define REGS_BASE 0x20000  /* register file at 128 KB into mem */
+#define REGS_BASE 0xF0000  /* matches upstream 8086tiny */
 #endif
 #ifndef VIDEO_RAM_SIZE
 #define VIDEO_RAM_SIZE 0x10000
+#endif
+
+/* On ESP-IDF builds, place mem[] in external PSRAM via the BSS-in-PSRAM
+ * attribute. Host builds get plain BSS — 1.06 MB is fine on x86. */
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#define EMU_MEM_ATTR  EXT_RAM_BSS_ATTR
+#else
+#define EMU_MEM_ATTR
 #endif
 
 // Graphics/timer/keyboard update delays (explained later)
@@ -191,8 +220,15 @@ static inline int ftime(struct timeb *t) { t->millitm = 0; return 0; }
 // Reinterpretation cast
 #define CAST(a) *(a*)&
 
-// Keyboard driver for console. This may need changing for UNIX/non-UNIX platforms
-#ifdef _WIN32
+// Keyboard driver for console. This may need changing for UNIX/non-UNIX platforms.
+// On ESP-IDF, stdin is the UART/JTAG console — read(0, ...) often returns >0
+// from buffered noise, which fires pc_interrupt(7) every timer tick. With
+// IVT[7] uninstalled (= 0:0), control jumps to 0:0 and the emulator halts
+// mid-execution. We don't use INT 7 keyboard input anyway — keyboard data
+// comes through the kernel's BIOSSEG IN call. Disable the host-stdin path.
+#ifdef ESP_PLATFORM
+#define KEYBOARD_DRIVER 0  /* no-op for comma-chain — kernel reads keys via BIOSSEG IN */
+#elif defined(_WIN32)
 #define KEYBOARD_DRIVER kbhit() && (mem[0x4A6] = getch(), pc_interrupt(7))
 #else
 #define KEYBOARD_DRIVER read(0, mem + 0x4A6, 1) && (int8_asap = (mem[0x4A6] == 0x1B), pc_interrupt(7))
@@ -205,15 +241,13 @@ static inline int ftime(struct timeb *t) { t->millitm = 0; return 0; }
 #define SDL_KEYBOARD_DRIVER sdl_screen ? SDL_PollEvent(&sdl_event) && (sdl_event.type == SDL_KEYDOWN || sdl_event.type == SDL_KEYUP) && (scratch_uint = sdl_event.key.keysym.unicode, scratch2_uint = sdl_event.key.keysym.mod, CAST(short)mem[0x4A6] = 0x400 + 0x800*!!(scratch2_uint & KMOD_ALT) + 0x1000*!!(scratch2_uint & KMOD_SHIFT) + 0x2000*!!(scratch2_uint & KMOD_CTRL) + 0x4000*(sdl_event.type == SDL_KEYUP) + ((!scratch_uint || scratch_uint > 0x7F) ? sdl_event.key.keysym.sym : scratch_uint), pc_interrupt(7)) : (KEYBOARD_DRIVER)
 #endif
 
-/* PATCH (ESP-IDF): kept as a static array (was the upstream pattern)
- * but now sized per RAM_SIZE = 256 KB, which fits in the S3's
- * internal DRAM. Reserving in BSS guarantees a contiguous block
- * regardless of heap fragmentation; on hardware where PSRAM is
- * available we could still XIP this region into PSRAM via
- * EXT_RAM_BSS_ATTR, but for v1 we stick with internal DRAM. */
+/* mem[] is the emulator's flat 1 MB + margin memory. On ESP-IDF
+ * builds, EMU_MEM_ATTR=EXT_RAM_BSS_ATTR places it in PSRAM (the S3's
+ * internal DRAM is only 512 KB). On host builds, EMU_MEM_ATTR is empty
+ * and the array goes in regular BSS. */
 
 // Global variable definitions
-unsigned char mem[RAM_SIZE];
+EMU_MEM_ATTR unsigned char mem[RAM_SIZE];
 unsigned char io_ports[IO_PORT_COUNT], *opcode_stream, *regs8, i_rm, i_w, i_reg, i_mod, i_mod_size, i_d, i_reg4bit, raw_opcode_id, xlat_opcode_id, extra, rep_mode, seg_override_en, rep_override_en, trap_flag, int8_asap, scratch_uchar, io_hi_lo, *vid_mem_base, spkr_en, bios_table_lookup[20][256];
 unsigned short *regs16, reg_ip, seg_override, file_index, wave_counter;
 unsigned int op_source, op_dest, rm_addr, op_to_addr, op_from_addr, i_data0, i_data1, i_data2, scratch_uint, scratch2_uint, inst_counter, set_flags_type, GRAPHICS_X, GRAPHICS_Y, pixel_colors[16], vmem_ctr;
@@ -314,7 +348,7 @@ void audio_callback(void *data, unsigned char *stream, int len)
 }
 #endif
 
-// PATCH (espdos): emu_run_n() ? runs at most `max_steps` instructions
+// PATCH (espdos): emu_run_n() — runs at most `max_steps` instructions
 // (or until CS:IP=0:0 if max_steps == 0). Both the original
 // standalone main() below and our ESP-IDF firmware's app_main call
 // into this. The for-loop body is otherwise byte-identical to the
@@ -374,7 +408,7 @@ int emu_run_n(int max_steps)
 			else if (i_mod != 1)
 				i_data2 = i_data1;
 			else // If i_mod is 1, operand is (usually) 8 bits rather than 16 bits
-				i_data1 = (char)i_data1;
+				i_data1 = (int8_t)i_data1;
 
 			DECODE_RM_REG;
 		}
@@ -385,7 +419,7 @@ int emu_run_n(int max_steps)
 			OPCODE_CHAIN 0: // Conditional jump (JAE, JNAE, etc.)
 				// i_w is the invert flag, e.g. i_w == 1 means JNAE, whereas i_w == 0 means JAE 
 				scratch_uchar = raw_opcode_id / 2 & 7;
-				reg_ip += (char)i_data0 * (i_w ^ (regs8[bios_table_lookup[TABLE_COND_JUMP_DECODE_A][scratch_uchar]] || regs8[bios_table_lookup[TABLE_COND_JUMP_DECODE_B][scratch_uchar]] || regs8[bios_table_lookup[TABLE_COND_JUMP_DECODE_C][scratch_uchar]] ^ regs8[bios_table_lookup[TABLE_COND_JUMP_DECODE_D][scratch_uchar]]))
+				reg_ip += (int8_t)i_data0 * (i_w ^ (regs8[bios_table_lookup[TABLE_COND_JUMP_DECODE_A][scratch_uchar]] || regs8[bios_table_lookup[TABLE_COND_JUMP_DECODE_B][scratch_uchar]] || regs8[bios_table_lookup[TABLE_COND_JUMP_DECODE_C][scratch_uchar]] ^ regs8[bios_table_lookup[TABLE_COND_JUMP_DECODE_D][scratch_uchar]]))
 			OPCODE 1: // MOV reg, imm
 				i_w = !!(raw_opcode_id & 8);
 				R_M_OP(mem[GET_REG_ADDR(i_reg4bit)], =, i_data0)
@@ -433,11 +467,11 @@ int emu_run_n(int max_steps)
 					OPCODE 4: // MUL
 						i_w ? MUL_MACRO(unsigned short, regs16) : MUL_MACRO(unsigned char, regs8)
 					OPCODE 5: // IMUL
-						i_w ? MUL_MACRO(short, regs16) : MUL_MACRO(char, regs8)
+						i_w ? MUL_MACRO(short, regs16) : MUL_MACRO(int8_t, regs8)
 					OPCODE 6: // DIV
 						i_w ? DIV_MACRO(unsigned short, unsigned, regs16) : DIV_MACRO(unsigned char, unsigned short, regs8)
 					OPCODE 7: // IDIV
-						i_w ? DIV_MACRO(short, int, regs16) : DIV_MACRO(char, short, regs8);
+						i_w ? DIV_MACRO(short, int, regs16) : DIV_MACRO(int8_t, short, regs8);
 				}
 			OPCODE 7: // ADD|OR|ADC|SBB|AND|SUB|XOR|CMP AL/AX, immed
 				rm_addr = REGS_BASE;
@@ -447,7 +481,7 @@ int emu_run_n(int max_steps)
 				reg_ip--;
 			OPCODE_CHAIN 8: // ADD|OR|ADC|SBB|AND|SUB|XOR|CMP reg, immed
 				op_to_addr = rm_addr;
-				regs16[REG_SCRATCH] = (i_d |= !i_w) ? (char)i_data2 : i_data2;
+				regs16[REG_SCRATCH] = (i_d |= !i_w) ? (int8_t)i_data2 : i_data2;
 				op_from_addr = REGS_BASE + 2 * REG_SCRATCH;
 				reg_ip += !i_d + 1;
 				set_opcode(0x08 * (extra = i_reg));
@@ -499,7 +533,7 @@ int emu_run_n(int max_steps)
 				scratch2_uint = SIGN_OF(mem[rm_addr]),
 				scratch_uint = extra ? // xxx reg/mem, imm
 					++reg_ip,
-					(char)i_data1
+					(int8_t)i_data1
 				: // xxx reg/mem, CL
 					i_d
 						? 31 & regs8[REG_CL]
@@ -557,7 +591,7 @@ int emu_run_n(int max_steps)
 					OPCODE 3: // JCXXZ
 						scratch_uint = !++regs16[REG_CX];
 				}
-				reg_ip += scratch_uint*(char)i_data0
+				reg_ip += scratch_uint*(int8_t)i_data0
 			OPCODE 14: // JMP | CALL short/near
 				reg_ip += 3 - i_d;
 				if (!i_w)
@@ -568,7 +602,7 @@ int emu_run_n(int max_steps)
 					else // CALL
 						R_M_PUSH(reg_ip);
 				}
-				reg_ip += i_d && i_w ? (char)i_data0 : i_data0
+				reg_ip += i_d && i_w ? (int8_t)i_data0 : i_data0
 			OPCODE 15: // TEST reg, r/m
 				MEM_OP(op_from_addr, &, op_to_addr)
 			OPCODE 16: // XCHG AX, regs16
@@ -709,7 +743,7 @@ int emu_run_n(int max_steps)
 			OPCODE 47: // TEST AL/AX, immed
 				R_M_OP(regs8[REG_AL], &, i_data0)
 			OPCODE 48: // Emulator-specific 0F xx opcodes
-				switch ((char)i_data0)
+				switch ((int8_t)i_data0)
 				{
 					OPCODE_CHAIN 0: // PUTCHAR_AL
 						write(1, regs8, 1)
@@ -724,7 +758,7 @@ int emu_run_n(int max_steps)
 						 * (any-args fn pointer) and modern GCC rejects calling such a
 						 * pointer with arguments. Use the actual signature instead. */
 						regs8[REG_AL] = ~lseek(disk[regs8[REG_DL]], CAST(unsigned)regs16[REG_BP] << 9, 0)
-							? ((char)i_data0 == 3
+							? ((int8_t)i_data0 == 3
 							   ? (int(*)(int, const void*, unsigned))write
 							   : (int(*)(int, const void*, unsigned))read)(disk[regs8[REG_DL]], mem + SEGREG(REG_ES, REG_BX,), regs16[REG_AX])
 							: 0;
@@ -809,7 +843,7 @@ int emu_run_n(int max_steps)
 
 // PATCH (espdos): tiny helpers exposed to the firmware. These need
 // access to the OPCODE/MEM_OP macros and the typed globals declared
-// above, so they live here instead of in emu8086.c.
+// above, so they live here instead of in esp8086.c.
 
 // Initialize CPU state: trap flag off, CS:IP set, segment-override
 // counters cleared. Caller has already populated mem[] and lookup

@@ -403,6 +403,19 @@ def translate(lines):
             out.append(f"{m.group('lead')}{op} {reg}, 1{('  ' + comment) if comment else ''}\n")
             continue
 
+        # R9 (must run BEFORE R13/R13b): SCP `JP <target>` is the
+        # SCP shorthand for *unconditional* jump (a quirk of the
+        # SCP-ASM dialect). NASM's `JP` is the parity-conditional
+        # jump (= `JPE`), which is NOT what 86DOS.ASM means. If
+        # R13/R13b ran first they would treat `JP <label>` as a
+        # parity-conditional and mis-translate it — that's how
+        # MYD's digit loop and BUFIN's GETCH loop got broken.
+        m = _RE_JP.match(line)
+        if m:
+            comment = m.group('comment') or ''
+            out.append(f"{m.group('lead')}jmp {m.group('target')}{('  ' + comment) if comment else ''}\n")
+            continue
+
         # R13: `J<cond> RET` → invert + inline ret. Must run before
         # the generic JP rule (since some conditionals overlap).
         m = _RE_JCC_RET.match(line)
@@ -436,12 +449,8 @@ def translate(lines):
             out.append(f"{label}:{('  ' + comment) if comment else ''}\n")
             continue
 
-        # R9: JP <label> → jmp <label>.
-        m = _RE_JP.match(line)
-        if m:
-            comment = m.group('comment') or ''
-            out.append(f"{m.group('lead')}jmp {m.group('target')}{('  ' + comment) if comment else ''}\n")
-            continue
+        # R9 was moved above R13/R13b to fix `JP <label>` being
+        # mis-interpreted as parity-conditional.
 
         # R12: SBC <ops> → sbb <ops>. Must run before the generic
         # shortcut matcher (SBC is 3 letters, would otherwise be
