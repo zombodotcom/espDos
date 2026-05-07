@@ -1,0 +1,33 @@
+menu "espDos display"
+
+    config ESPDOS_HAS_DISPLAY
+        bool "Enable LCD display mirror"
+        default n
+        help
+            Enable mirroring of BIOS console output to an onboard LCD.
+            On targets with no LCD wired (e.g. T-Display-S3 in espDos
+            today), leave this off — the display API compiles out to
+            inline no-ops.
+
+    config ESPDOS_DISPLAY_SUBPIXEL
+        bool "Use subpixel-rendered 80-column log"
+        depends on ESPDOS_HAS_DISPLAY
+        default y
+        help
+            When on, log rows are rendered with Bowman/ClearType-style
+            subpixel anti-aliasing, giving 80 columns on a 160-pixel-
+            wide ST7735 (true DOS width). Status bar always uses sharp
+            26-column rendering so the always-visible chrome has no
+            color fringing. When off, both regions use sharp 26-col.
+
+    config ESPDOS_DISPLAY_CALIBRATION
+        bool "Render subpixel calibration pattern at boot"
+        depends on ESPDOS_HAS_DISPLAY
+        default n
+        help
+            On boot, render three horizontal bars colored exclusively
+            in subpixel 0/1/2 of each pixel triplet, then sleep 5 s
+            before normal display init. Use to verify panel stripe
+            order (BGR vs RGB). Should normally be off.
+
+endmenu

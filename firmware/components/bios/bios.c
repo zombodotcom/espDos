@@ -17,6 +17,7 @@
 #include "freertos/task.h"
 
 #include "bios.h"
+#include "display.h"
 
 /* The T-Display-S3's USB-C is wired to the chip's native USB-Serial-JTAG
  * peripheral, NOT to UART0 (UART0 only goes to physical TX/RX pins).
@@ -181,6 +182,9 @@ static void bios_out(uint8_t ch) {
      * buffer, so a blocking write would freeze the entire emulator
      * the moment the driver buffer fills. */
     usb_serial_jtag_write_bytes(&ch, 1, 0);
+    /* Mirror to the LCD on targets that have one. The call is an
+     * inline no-op when CONFIG_ESPDOS_HAS_DISPLAY=n. */
+    display_putc(ch);
 
 #ifdef ESPDOS_LOG_OUT
     if (ch == '\r' || ch == '\n') {

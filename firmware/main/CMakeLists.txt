@@ -1,7 +1,7 @@
 idf_component_register(
     SRCS "espdos.c"
     INCLUDE_DIRS "."
-    REQUIRES esp8086 kernel_blob bios
+    REQUIRES esp8086 kernel_blob bios display
 )
 
 # Optional: build with the confidence-harness payload (asm/hello.bin)

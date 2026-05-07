@@ -16,6 +16,7 @@
 #include "esp8086.h"
 #include "kernel_blob.h"
 #include "bios.h"
+#include "display.h"
 
 static const char *TAG = "espdos";
 
@@ -129,6 +130,22 @@ void app_main(void)
     extern const uint8_t bootstub_bin_start[] asm("_binary_bootstub_mandel_bin_start");
     extern const uint8_t bootstub_bin_end[]   asm("_binary_bootstub_mandel_bin_end");
 #endif
+    display_init();
+    display_set_program(
+#if defined(ESPDOS_LOADER_HELLO)
+        "HELLO.COM"
+#elif defined(ESPDOS_LOADER_COUNT)
+        "COUNT.COM"
+#elif defined(ESPDOS_LOADER_SHELL)
+        "SHELL.COM"
+#elif defined(ESPDOS_LOADER_JULIA)
+        "JULIA.COM"
+#elif defined(ESPDOS_LOADER_LIFE)
+        "LIFE.COM"
+#else
+        "MANDEL.COM"
+#endif
+    );
     size_t bootstub_len = (size_t)(bootstub_bin_end - bootstub_bin_start);
     ESP_LOGI(TAG, "loading boot stub: %zu bytes at %04x:%04x",
              bootstub_len, EMU_BOOT_SEG, EMU_BOOT_OFFSET);
@@ -181,6 +198,7 @@ void app_main(void)
                  emu_get_cs(), emu_get_ip(), emu_get_ax());
 #endif
         beat++;
+        display_set_beat((uint32_t)beat);
         if (!still_running) {
             ESP_LOGI(TAG, "----- emulator halted (CS:IP=0:0) -----");
             break;
