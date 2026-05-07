@@ -26,6 +26,103 @@ Everything happens inside the unmodified 86-DOS kernel — `INT 21h`, the
 just another `.COM` file on disk; the kernel's loader brings it up the
 same way it would any program.
 
+## What it looks like
+
+Boot, banner, date prompt (auto-fed `1-1-80`), shell menu — byte-for-byte
+captured from a host run of the same kernel + transients:
+
+```
+86-DOS version 1.00
+Copyright 1980,81 Seattle Computer Products, Inc.
+Enter today's date (m-d-y): 1-1-80
+
+espDos shell
+  1) HELLO   - banner
+  2) COUNT   - 1..50
+  3) MANDEL  - ASCII fractal
+  4) JULIA   - color animated set
+  5) LIFE    - Conways Game of Life
+  q) quit
+> _
+```
+
+`1` runs `HELLO.COM`:
+
+```
++----------------------------------------+
+|  Hello, World!                         |
+|  This is HELLO.COM running on espDos:  |
+|  Tim Paterson 86-DOS 1.00, on ESP32-S3 |
++----------------------------------------+
+```
+
+`2` runs `COUNT.COM`:
+
+```
+01 02 03 04 05 06 07 08 09 10
+11 12 13 14 15 16 17 18 19 20
+21 22 23 24 25 26 27 28 29 30
+31 32 33 34 35 36 37 38 39 40
+41 42 43 44 45 46 47 48 49 50
+```
+
+`3` runs `MANDEL.COM` — Q4.12 fixed-point Mandelbrot, 78 × 24 ASCII,
+ramp `' .:-=+*#%@'`. Cardioid + period-2 disk early-reject means the
+big black blob is detected without iterating; everything else escapes
+under the 24-iter cap and gets a density character. Render time on
+hardware: ~1.2 s after the perf flags.
+
+```
+                ...@.....:.:::-:::..........-:::...:*::::=+=-+#::..:-::.....:.
+             --++..-:-.::..:*::........:::-::....--::==:--*@+#*==::...::::....
+           .+..:@:+:.:.:=::........*:--:+.....::::+:-*+@@@@@@@++#:::::-...:-..
+         ..::---::%:.:.+........:+@-:.....=::+-:::-:###@@@@@@@@+-:+::#:::=:..:
+       .:.:::.%.---:.........::......+:::=-*##@=--#@+@+*@@@@@@*##=*@==:::-#::.
+     .::::.::=.................::-:-::::-::==#@@@@@@@@@@@@@@@@@@@@@@@+@@@@@+::
+    .:+.:-...............:=*:=:::::::+:::-@=+#@@@@@@@@@@@@@@@@@@@@@@@@@@@##:::
+   +:..........*=...-*:+:::::::::::@--:+-+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@=---
+  +.....:-::#...---:=:+=+=+=-*@+------==+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%
+ ...:.:=-::..:+:=::-:=:==*@@@@@@@@@%+==*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@++=
+ .:::::....-::::::-=-*++@@@@@@@@@@@@@@##@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@+-:
+ ..:....:*--::-+:--+#@@%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@++::
+.+=*+*@@##*#%*#%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%+-=%=:
+ ..-+...::#*::-+:--+#%@%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@+:::
+ .+::-=....-::::::-+-==@@@@@@@@@@@@@@@##@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#+:
+ ...:.:+=:...::=:::*:+:==*@@@@@@@@@%+=++@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*==
+  =.....::+:#...:=::::-*+*+=-*@#=-----+%+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@=
+   :.:.........#....:=:*-::::::::::+++:+-*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@==-:
+    ::=.+...............=:::::::::::--:::=@@+#@@@@@@@@@@@@@@@@@@@@@@@@@@@#+:::
+     .::-:.:-:................*:-=:::::--::==#@@@@@@@@@@@@@@@@@@@@@@@+@@@@##::
+       .::#::*=::+:..........:-......:=:::-@#%@+--+@#@#*@@@@@@@#@=@#==:::-@=:.
+         ..-=:-:::--.::.........-::+......=::==::-+:@++@@@@@@@@+-:+:+::::::..-
+           @:..-=-=:.---:::........-:--::.....+:::::+=+@@@@@@@+#-::::--...:+..
+             ::-+..-::.::..::#:........::::::....==:::-:-++@+*@=-:-:..=:::....
+```
+
+`4` runs `JULIA.COM` — same Q4.12 IMUL kernel, but `c` walks a 30-step
+circle of radius 0.7885 around the origin while `z₀` varies per pixel.
+Each pixel emits an `ESC[NNm` ANSI color escape + density char (~6
+bytes/pixel); frames are separated by `ESC[H` (cursor home) so a real
+terminal overwrites the previous frame in place. The black filaments
+of a dendrite Julia morph through dust and seahorse atlases as the
+animation walks the c-orbit — markdown can't show the color, but you
+can imagine the same shape as MANDEL above with a per-pixel hue ramp
+that morphs frame-to-frame.
+
+`5` runs `LIFE.COM` — Conway's Game of Life on a 78 × 24 toroidal
+grid, 200 generations. The seed is a 16-bit LCG'd ~25% density (about
+470 alive cells at gen 0) so each run starts from real chaos. Cells
+are encoded as long-dead / just-died / long-alive / newborn so the
+render layer can show *gray dots* for dying cells, *bright white
+hashes* for newborn ignition, and a *per-generation cycling color*
+for the established population. The result is a pulse that you can
+visually track through gliders, oscillators, and the chaotic decay
+of dense regions.
+
+After any of the children does `INT 20h`, control returns to SHELL
+(via an IVT[20h] swap installed before launch) and the menu reprints
+— `q` halts cleanly.
+
 ## What you need
 
 - **LilyGO T-Display-S3** (ESP32-S3 with 8 MB octal PSRAM, 16 MB flash).
