@@ -12,3 +12,13 @@ if(DEFINED ESPDOS_AUTOPICK)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
         ESPDOS_AUTOPICK=${ESPDOS_AUTOPICK})
 endif()
+
+# Mirror BIOS console output through ESP_LOGI in addition to the raw
+# JTAG byte stream. Useful for QEMU `-serial file:` capture where the
+# JTAG channel isn't redirected. Off by default — keeps hardware
+# output clean of "I (...) bios: " prefixes that would interleave with
+# ANSI escape sequences and break cursor-positioning.
+#   idf.py build -DESPDOS_LOG_OUT=1
+if(ESPDOS_LOG_OUT)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE ESPDOS_LOG_OUT=1)
+endif()

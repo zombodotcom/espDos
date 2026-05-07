@@ -1,118 +1,155 @@
 # espDos
 
-Boot Tim Paterson's original `86DOS.ASM` — assembled from the source listings
-he released in April 2026 — on a plain ESP32-WROOM-32, served to your browser
-over WiFi.
+Tim Paterson's actual MS-DOS 1.0 (1981), running unmodified on a $20
+ESP32-S3 dev board.
 
-The differentiating feature: a side-by-side view of Paterson's actual ASM
-source with the currently-executing line highlighted, live, as the kernel
-runs. You're not watching an emulator — you're watching 1981 code execute.
+The kernel binary is built straight from `86DOS.ASM` — Paterson's own SCP
+listings, mechanically translated to NASM by `asm/scp_to_nasm.py`. It runs
+inside an Adrian Cable `8086tiny` fork on the chip, talks to a tiny BIOS
+shim that traps far-calls to `BIOSSEG` (0x0040) for console + disk, and
+loads its own `.COM` files off a FAT12 image flashed into a partition.
 
-## Where to start (cloning fresh)
+It boots, prints the original banner, accepts the date prompt, and
+hands control to whichever transient you picked. Five ship today:
 
-If you just cloned this repo, read in this order:
+| Program     | Bytes | What it does                                      |
+|-------------|------:|---------------------------------------------------|
+| `HELLO.COM` |   232 | Banner box                                        |
+| `COUNT.COM` |    71 | Prints 1..50 in decimal (AAM / DIV demo)          |
+| `MANDEL.COM`|   450 | Q4.12 fixed-point ASCII Mandelbrot, 78×24         |
+| `JULIA.COM` |  1082 | 16-color animated Julia set, c walks a circle    |
+| `SHELL.COM` |   393 | Interactive menu; re-entry on `INT 20h` from kids |
 
-1. **`docs/superpowers/specs/2026-05-04-esp32-dos-port-design.md`** — the
-   architecture (8086 emulator on ESP32, BIOS as far-call traps, browser
-   terminal, flash-baked FAT12, etc.). Single source of truth for what
-   we're building.
-2. **`docs/research/2026-05-05-roadmap-and-cool-factor.md`** — the
-   "what makes this distinctive vs. what's been done" research and the
-   5-plan roadmap. Read this to understand the *why* behind the
-   architecture and the live-source-annotation feature.
-3. **`docs/superpowers/plans/2026-05-04-host-kernel-boot.md`** — Plan 1
-   of 5: assemble the kernel with NASM, run it on host (Windows) in an
-   adapted `8086tiny`, drive it to the date prompt with stdio BIOS.
-   This is the next concrete thing to execute.
+Everything happens inside the unmodified 86-DOS kernel — `INT 21h`, the
+1981 DISPATCH table, the original FAT12 file ops. The shell is itself
+just another `.COM` file on disk; the kernel's loader brings it up the
+same way it would any program.
 
-## Branches
+## What you need
 
-- **`master`** — initial scaffold; superseded by `emulated-kernel`. Kept
-  for history.
-- **`emulated-kernel`** — active branch. Current architecture (kernel
-  runs in 8086 emulator). All current docs and roadmap live here.
-- **`plan1-kernel-host-verify`** — abandoned earlier attempt to use
-  jgbarah's C translation of the kernel. Hit multiple kernel-flow bugs
-  in core file I/O. Tagged `archive/plan1-translation-attempt` so
-  `git checkout archive/plan1-translation-attempt` shows the dead end and
-  the bugs we found. Read its commit log if you wonder why we pivoted to
-  emulation.
+- **LilyGO T-Display-S3** (ESP32-S3 with 8 MB octal PSRAM, 16 MB flash).
+  The OLED isn't wired up on this particular board, so all I/O goes
+  through USB-Serial-JTAG.
+- **ESP-IDF v5.4.1** (older versions don't ship the right NASM / esp_psram
+  configuration; `~/esp/v5.4.1/esp-idf/export.ps1` on Windows).
+- **NASM** for assembling the kernel and transients.
+- **Python 3** (use `py` on Windows) for the FAT12 image builder.
+- **MinGW-w64 GCC** for the host test suite.
+- *(optional)* **QEMU 9.2.2** with octal PSRAM support
+  (`esp-develop-9.2.2-20260417`) for fast iteration without flashing —
+  see `docs/integrity.md` for the recipe and the binary URL.
 
-## Status (as of 2026-05-05)
+## Build and flash
 
-**Plan 1 progress: Tasks 1–3 of 8 done.**
+```powershell
+# Build the kernel + boot stub + every transient + the FAT12 disk image.
+bash asm/build_kernel.sh
+py tools/build_disk.py build/disk.img
 
-- ✅ **Task 1: project skeleton + Makefile** — `Makefile`, `asm/build_kernel.sh`,
-  `host/main.c` placeholder. `mingw32-make` produces `build/kernel.bin`
-  + (eventually) `build/dos_host.exe`.
-- ✅ **Task 2: assemble 86DOS.ASM** — `asm/scp_to_nasm.py` translates SCP-ASM
-  2.43 dialect to NASM (22 mechanical rules; Tim Paterson's source remains
-  read-only). Output: `build/kernel.bin` (6,341 bytes; about 8% larger
-  than the original 5,861-byte SCP-ASM output, due to rule R13b expanding
-  out-of-range `Jcc rel8` to `Jnotcc + JMP rel16` — see
-  `docs/integrity.md`). Banner string
-  "86-DOS" verified at offset 0x1d, "Copyright" at 0x32, first instruction
-  is JMP DOSINIT at offset 0x146d. **The kernel assembles cleanly.**
-- ✅ **Task 3: vendor 8086tiny** — Adrian Cable's emulator copied to
-  `third_party/8086tiny/` (MIT). Two `/* PATCH (MinGW): ... */` patches
-  applied so it compiles cleanly under MinGW-w64 GCC 15: (a) include
-  `<conio.h>` and `<io.h>` on `_WIN32` for `kbhit`/`getch`/`open`/etc.,
-  (b) replace one K&R-era function-pointer cast with a properly-typed
-  one. Standalone compile produces `/tmp/8086tiny.o` with no warnings.
-- ⏳ **Task 4: emulator adapter + far-call trap** — not yet wired.
-  Two viable paths from here:
-  1. **Edit 8086tiny.c in place**: replace its `main()` (which boots from
-     a floppy image and uses an external BIOS file) with our own that
-     loads `kernel.bin` at `KERNEL_SEG:0000`, sets CS:IP to that, and
-     adds a per-instruction hook in the existing for-loop to detect
-     `CS == BIOSSEG (0x40)` and dispatch into our BIOS handlers.
-     Pro: keeps the well-tested instruction decoder. Con: invasive edits
-     to vendored source.
-  2. **Write our own minimal emulator**: ~1500–2500 lines of C
-     implementing the 8086 instruction subset 86DOS uses. Cleaner
-     integration; full control. Con: weeks of careful work; risk of
-     ISA bugs that EDLIN/DEBUG would later trip.
-  Recommend path 1 — start by `#ifdef`'ing out 8086tiny's `main()` and
-  adding a `step()` callable that runs one iteration of the existing
-  loop body.
-- ⏳ **Tasks 5–8**: BIOS dispatch + console + disk handlers; load
-  kernel into emu memory; iterate until banner + date prompt work.
+# Build the firmware. Default loads MANDEL directly. Pick another
+# program with -DESPDOS_LOADER_<NAME>=1 (HELLO, COUNT, MANDEL, JULIA,
+# or SHELL).
+cd firmware
+C:\Users\zombo\esp\v5.4.1\esp-idf\export.ps1
+idf.py fullclean
+idf.py build -DESPDOS_LOADER_SHELL=1
+idf.py flash monitor
+```
 
-### Hardware
+Inside `idf.py monitor`:
 
-The user has a **LilyGO T-Display-S3** plugged in (broken TFT, but we're
-using browser anyway). The chip is on COM3 at VID:PID `303A:1001`. We
-can't talk to it via esptool without a manual BOOT+RESET, so all
-development is host-only until the user is back at the device. Good
-news: T-Display-S3 has 8MB PSRAM and 16MB flash, so the memory budget
-in the spec (which assumed plain ESP32-WROOM-32) has lots of slack.
+- Boot log → kernel banner → date prompt (auto-fed `1-1-80`) → SHELL menu
+- Type `1`/`2`/`3`/`4` and Enter to launch; `q` to halt
+- After a child program returns, SHELL re-enters and the menu reprints
+- `Ctrl-]` exits the monitor; `Ctrl-T Ctrl-R` resets the board
 
-### Where to pick up
+## Build flags
 
-After cloning and `git pull`:
-1. Check `mingw32-make` produces `build/kernel.bin` (Task 1+2 work)
-2. Adapt `third_party/8086tiny/8086tiny.c` per Task 4 of the plan; the
-   kernel binary is ready to feed into it.
+| Flag                          | Effect                                        |
+|-------------------------------|-----------------------------------------------|
+| `-DESPDOS_LOADER_HELLO=1`     | Boot directly into HELLO.COM                  |
+| `-DESPDOS_LOADER_COUNT=1`     | Boot directly into COUNT.COM                  |
+| `-DESPDOS_LOADER_MANDEL=1` *(default)* | Boot directly into MANDEL.COM        |
+| `-DESPDOS_LOADER_JULIA=1`     | Boot directly into JULIA.COM                  |
+| `-DESPDOS_LOADER_SHELL=1`     | Boot into the interactive menu                |
+| `-DESPDOS_AUTOPICK=N`         | Pre-feed digit N to SHELL (for QEMU testing)  |
+| `-DESPDOS_INTERACTIVE_DATE=1` | Type the date yourself instead of auto-feed   |
+| `-DESPDOS_LOG_OUT=1`          | Mirror BIOSOUT through `ESP_LOGI` (QEMU debug)|
+| `-DESPDOS_HEARTBEAT=1`        | Per-beat instruction-count log (debug)        |
 
-## Hardware target
+## Architecture
 
-Plain ESP32-WROOM-32. No PSRAM. No SD card. WiFi built-in. No external
-peripherals. The whole demo runs through the browser over WiFi.
+```
++--------------------------------------------------+
+|  app_main (firmware/main/espdos.c)               |
+|    - allocates 1MB+64KB emu RAM in PSRAM         |
+|    - copies bootstub + kernel + 8086tiny BIOS    |
+|    - sets CS:IP = BOOT_SEG:0  and runs           |
++--------------------------------------------------+
+                      |
+                      v   per-instruction loop in
++--------------------------------------------------+
+|  esp8086.c  (forked 8086tiny, MIT)               |
+|    - 1MB+64KB mem[] in PSRAM via EXT_RAM_BSS     |
+|    - REGS_BASE = 0xF0000                         |
+|    - per-step trap on  CS == 0x0040  (BIOSSEG)   |
++--------------------------------------------------+
+                      |
+                      v   BIOS far-call dispatch
++--------------------------------------------------+
+|  bios.c                                          |
+|    - STAT/IN/OUT  -> USB-Serial-JTAG             |
+|    - READ/WRITE   -> esp_partition (dos_disk)    |
+|    - BIOSSEG handlers RETF on return             |
++--------------------------------------------------+
+                      |
+                      v   86-DOS kernel runs as 8086
++--------------------------------------------------+
+|  kernel.bin  (assembled from 86DOS.ASM)          |
+|    - 6,341 bytes of Tim Paterson's 1981 source   |
+|    - INT 21h DISPATCH, FAT12, BUFIN, PRTBUF...   |
+|    - JMP FAR USER_SEG:0x100  hands off transient |
++--------------------------------------------------+
+```
 
-## Toolchain assumed
+The integrity argument — what's original Paterson code vs. what's
+espDos's wiring — is laid out file-by-file in `docs/integrity.md`.
+The Mandelbrot performance work and the literature survey on 1980s
+fractal optimization are in `docs/mandelbrot-performance.md`.
 
-- **NASM** for the kernel (and `SHELL.COM` later)
-- **MinGW-w64 GCC** for the host build (Windows)
-- **ESP-IDF** for the embedded build (later plans only)
-- **Python 3** for the disk-image and line-index build helpers
+## Tests
 
-## License notes
+```bash
+cd tests/emu && mingw32-make run
+```
 
-- The kernel sources we assemble live in
-  `Paterson-Listings/3_source_code/86-DOS_1.00/86DOS.ASM` (a sibling
-  repo, cloned separately from `https://github.com/DOS-History/Paterson-Listings`)
-  and are reproduced for historical study under their original copyright.
-- Adrian Cable's `8086tiny` (vendored later in `third_party/8086tiny/`)
-  is CC0 / public domain.
-- This project's own code (host harness, BIOS handlers, web terminal,
-  build tooling) is unlicensed in v1; pick a license before publishing.
+9 host tests, each running the same `esp8086.c` the firmware uses,
+exercising it from a small C harness with stub BIOS handlers:
+
+- `test_emu_basic`     — opcode decoder + register file
+- `test_memory_bounds` — full 1 MB span + REGS_BASE alignment
+- `test_kernel_banner` — kernel runs to date prompt; banner byte-exact
+- `test_loader`        — bootstub + loader load HELLO; "Hello, World!" appears
+- `test_mandel`        — full 78×24 Mandelbrot grid renders
+- `test_fininit_stack` — stack layout at FININIT exit (drove the loader design)
+- `test_disk_*`        — FAT12 read paths
+
+## Why this exists
+
+You can find emulators that pretend to run DOS by interpreting
+recompiled-from-source dialects, or by booting a stripped-down kernel
+that calls the same INT 21h numbers. espDos boots the **original
+binary**, instruction by instruction, on a $20 chip. The integrity
+argument — that you can git-diff Paterson's 1981 listings against what
+runs on the wire — is the entire point.
+
+## License
+
+- `Paterson-Listings/3_source_code/86-DOS_1.00/86DOS.ASM` — original
+  copyright Tim Paterson / Seattle Computer Products, 1981. Reproduced
+  for historical study under their original terms; not modified.
+- `third_party/8086tiny/` — Adrian Cable, MIT. Forked into
+  `firmware/components/esp8086/` with PSRAM + ESP-IDF integration
+  patches that are clearly marked.
+- espDos's own code (asm transients, BIOS shim, build tooling, docs)
+  is unlicensed in v1 — file an issue if you want to use it.

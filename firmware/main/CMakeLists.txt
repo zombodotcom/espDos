@@ -34,11 +34,20 @@ if(ESPDOS_LOADER_COUNT)
 endif()
 
 # Optional: load SHELL.COM (sector 14) — interactive program selector.
-# Reads a digit (1=HELLO, 2=COUNT, 3=MANDEL) and dispatches.
+# Reads a digit (1=HELLO, 2=COUNT, 3=MANDEL, 4=JULIA) and dispatches.
 #   idf.py build -DESPDOS_LOADER_SHELL=1
 if(ESPDOS_LOADER_SHELL)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE ESPDOS_LOADER_SHELL=1)
     message(STATUS "espdos: building with SHELL.COM loader "
+                   "(default is MANDEL.COM)")
+endif()
+
+# Optional: load JULIA.COM directly (skip the shell). Animated 16-color
+# Julia set, 30 frames around a circle of c.
+#   idf.py build -DESPDOS_LOADER_JULIA=1
+if(ESPDOS_LOADER_JULIA)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE ESPDOS_LOADER_JULIA=1)
+    message(STATUS "espdos: building with JULIA.COM loader "
                    "(default is MANDEL.COM)")
 endif()
 

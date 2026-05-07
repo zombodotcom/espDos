@@ -30,6 +30,7 @@ CHILD_SEG       equ 0x3000
 HELLO_SECTOR    equ 11
 MANDEL_SECTOR   equ 12
 COUNT_SECTOR    equ 13
+JULIA_SECTOR    equ 15           ; cluster 6, spans 3 sectors
 
 INT20_VEC       equ 0x20*4
 
@@ -79,20 +80,31 @@ prompt:
     je   pick_count
     cmp  al, '3'
     je   pick_mandel
+    cmp  al, '4'
+    je   pick_julia
     jmp  quit
 
 pick_hello:
     mov  dx, HELLO_SECTOR
+    mov  cx, 1
     jmp  load_and_run
 pick_count:
     mov  dx, COUNT_SECTOR
+    mov  cx, 1
     jmp  load_and_run
 pick_mandel:
     mov  dx, MANDEL_SECTOR
+    mov  cx, 1
+    jmp  load_and_run
+pick_julia:
+    mov  dx, JULIA_SECTOR
+    mov  cx, 3                   ; julia.bin = 1082 bytes -> 3 sectors
 
 load_and_run:
     ; Save SP so on_child_exit can switch back to our stack.
     mov  [shell_sp_save], sp
+    ; Save sector count too — DS clobber below would otherwise lose it.
+    mov  [shell_count_save], cx
 
     ; Install IVT[20h] = (on_child_exit, our CS = USER_SEG).
     cli
@@ -103,13 +115,13 @@ load_and_run:
     mov  word [es:INT20_VEC + 2], ax
     sti
 
-    ; BIOSREAD one sector into CHILD_SEG:0x100.
+    ; BIOSREAD CX sectors into CHILD_SEG:0x100.
     ;   AL=drive, BX=offset, CX=count, DX=sector, DS=buffer seg.
     mov  ax, CHILD_SEG
     mov  ds, ax
     mov  al, 0
     mov  bx, 0x100
-    mov  cx, 1
+    mov  cx, [cs:shell_count_save]
     call 0x0040:0x0015           ; BIOSSEG:BIOSREAD
     jc   load_failed
 
@@ -165,6 +177,7 @@ menu:
     db '  1) HELLO   - banner', 0x0D, 0x0A
     db '  2) COUNT   - 1..50', 0x0D, 0x0A
     db '  3) MANDEL  - ASCII fractal', 0x0D, 0x0A
+    db '  4) JULIA   - color animated set', 0x0D, 0x0A
     db '  q) quit', 0x0D, 0x0A
     db '> $'
 
@@ -174,6 +187,7 @@ between:
 fail_msg:
     db 0x0D, 0x0A, 'load failed', 0x0D, 0x0A, '$'
 
-prev_int20_off: dw 0
-prev_int20_seg: dw 0
-shell_sp_save:  dw 0
+prev_int20_off:    dw 0
+prev_int20_seg:    dw 0
+shell_sp_save:     dw 0
+shell_count_save:  dw 0

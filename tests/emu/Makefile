@@ -19,7 +19,8 @@ CFLAGS := -std=c99 -Wall \
 
 TESTS := test_jmp_near.exe test_kernel_first_step.exe test_bootstub.exe \
         test_hello.exe test_kernel_banner.exe test_memory_bounds.exe \
-        test_fininit_stack.exe test_loader.exe test_mandel.exe
+        test_fininit_stack.exe test_loader.exe test_mandel.exe \
+        test_julia.exe
 
 all: $(TESTS)
 
@@ -50,6 +51,9 @@ test_loader.exe: test_loader.c $(EMU_SRC) test_helpers.c
 test_mandel.exe: test_mandel.c $(EMU_SRC) test_helpers.c
 	gcc $(CFLAGS) $^ -o $@
 
+test_julia.exe: test_julia.c $(EMU_SRC) test_helpers.c
+	gcc $(CFLAGS) $^ -o $@
+
 run: all
 	@echo === test_jmp_near ===
 	@./test_jmp_near.exe ; echo "exit=$$?"
@@ -69,6 +73,8 @@ run: all
 	@./test_loader.exe ; echo "exit=$$?"
 	@echo === test_mandel ===
 	@./test_mandel.exe ; echo "exit=$$?"
+	@echo === test_julia ===
+	@./test_julia.exe ; echo "exit=$$?"
 
 clean:
 	rm -f *.exe

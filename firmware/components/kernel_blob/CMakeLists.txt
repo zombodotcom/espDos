@@ -27,6 +27,9 @@ idf_component_register(
         # (sector 13). Selected via -DESPDOS_LOADER_COUNT=1 at build.
         "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/bootstub_count.bin"
         # Shell-loader variant. Loads SHELL.COM (sector 14), which
-        # then dispatches to HELLO/COUNT/MANDEL based on a keystroke.
+        # then dispatches to HELLO/COUNT/MANDEL/JULIA based on a keystroke.
         "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/bootstub_shell.bin"
+        # Julia-loader variant. Loads JULIA.COM (3 sectors starting at
+        # sector 15). Selected via -DESPDOS_LOADER_JULIA=1.
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/bootstub_julia.bin"
 )

@@ -159,6 +159,41 @@ nasm -f bin \
 rm -f "$OUT_DIR/bootstub_count.asm.tmp"
 echo "Built: $OUT_DIR/bootstub_count.bin ($(wc -c < "$OUT_DIR/bootstub_count.bin") bytes)"
 
+# Transient JULIA.COM — animated 16-color Julia set. Cluster 6
+# (sectors 15..17 — 1082 bytes spans 3 sectors). Same Q4.12 IMUL
+# kernel as MANDEL.COM but with z0=pixel and c=animation parameter,
+# plus ANSI 16-color output.
+nasm -f bin \
+     -o "$OUT_DIR/julia.bin" \
+     -l "$OUT_DIR/julia.lst" \
+     "$SCRIPT_DIR/julia.asm"
+echo "Built: $OUT_DIR/julia.bin ($(wc -c < "$OUT_DIR/julia.bin") bytes)"
+
+JULIA_SECTOR=15
+JULIA_COUNT=3
+nasm -f bin \
+     -D"LOADER_OFFSET=$LOADER_OFF" \
+     -D"LOAD_SECTOR=$JULIA_SECTOR" \
+     -D"LOAD_COUNT=$JULIA_COUNT" \
+     -o "$OUT_DIR/loader_julia.bin" \
+     -l "$OUT_DIR/loader_julia.lst" \
+     "$SCRIPT_DIR/loader.asm"
+echo "Built: $OUT_DIR/loader_julia.bin ($(wc -c < "$OUT_DIR/loader_julia.bin") bytes) " \
+     "[LOAD_SECTOR=$JULIA_SECTOR LOAD_COUNT=$JULIA_COUNT]"
+
+cp "$SCRIPT_DIR/bootstub.asm" "$OUT_DIR/bootstub_julia.asm.tmp"
+sed -i 's|build/loader.bin|build/loader_julia.bin|' "$OUT_DIR/bootstub_julia.asm.tmp"
+nasm -f bin \
+     -D"KERNEL_SEG=$KSEG" \
+     -D"KERNEL_OFFSET=$KOFF" \
+     -D"LOADER_OFFSET=$LOADER_OFF" \
+     -i "$ROOT/" \
+     -o "$OUT_DIR/bootstub_julia.bin" \
+     -l "$OUT_DIR/bootstub_julia.lst" \
+     "$OUT_DIR/bootstub_julia.asm.tmp"
+rm -f "$OUT_DIR/bootstub_julia.asm.tmp"
+echo "Built: $OUT_DIR/bootstub_julia.bin ($(wc -c < "$OUT_DIR/bootstub_julia.bin") bytes)"
+
 # Transient SHELL.COM — interactive program selector. Cluster 5
 # (sector 14). When loaded by bootstub_shell.bin, prints a menu and
 # dispatches to HELLO/COUNT/MANDEL based on a single keystroke.

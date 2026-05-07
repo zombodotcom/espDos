@@ -24,7 +24,11 @@
  * which is why we see them, but for actual interactive I/O we must
  * read from the JTAG side or input never reaches the chip. */
 #define BIOS_RX_BUF    256
-#define BIOS_TX_BUF    256
+/* TX buffer sized for one full JULIA row + headroom: 78 pixels x
+ * 6 bytes (ESC[NNm + char) + row terminator (ESC[0m\r\n) = 475 bytes.
+ * Round up to 1024 so PRTBUF never stalls mid-row waiting for the
+ * driver to drain to USB. */
+#define BIOS_TX_BUF   1024
 
 static void disk_init(void);
 
@@ -138,15 +142,25 @@ static uint8_t bios_in(void) {
     }
 }
 
-/* Line-buffer 86-DOS console output through ESP_LOGI so each row of
- * mandel output appears as one log line on UART0 (and doesn't
- * interleave with heartbeat ESP_LOGI lines). Buffer is 128 bytes;
- * \r and \n both flush. Other control bytes < 0x20 are skipped.
+/* 86-DOS console output. Two output sinks, in order:
  *
- * Earlier we suspected this path caused the mandel halt-at-0:0 bug
- * and reverted to per-byte JTAG writes. The actual bug turned out
- * to be the KEYBOARD_DRIVER macro in esp8086.c firing pc_interrupt(7)
- * to a zero IVT entry. With that fixed, line buffering is safe. */
+ *   1. usb_serial_jtag_write_bytes — raw, per-byte. This is what
+ *      idf.py monitor and PuTTY (etc.) read on hardware. Raw
+ *      bytes mean ANSI escape sequences (ESC[H, ESC[34m, ...)
+ *      reach the terminal intact, which is essential for JULIA.COM
+ *      and any future TUI program.
+ *   2. Optional ESP_LOGI line-buffer mirror, gated on
+ *      -DESPDOS_LOG_OUT=1. Useful for QEMU `-serial file:` capture
+ *      where the JTAG channel isn't redirected and so the raw stream
+ *      is invisible. Default OFF so hardware output stays clean.
+ *
+ * Earlier in development we line-buffered through ESP_LOGI for
+ * everything because per-byte JTAG writes were invisible in QEMU
+ * file mode. The cost was that the "I (12345) bios: " prefix
+ * fragmented every row of program output and made cursor-home
+ * (ESC[H) animation impossible. Splitting the responsibility — raw
+ * always, ESP_LOGI on demand — gets us both. */
+#ifdef ESPDOS_LOG_OUT
 #define BIOS_OUT_BUF 128
 static char     bios_out_line[BIOS_OUT_BUF];
 static unsigned bios_out_len;
@@ -157,19 +171,32 @@ static void bios_out_flush(void) {
     ESP_LOGI(TAG, "%s", bios_out_line);
     bios_out_len = 0;
 }
+#endif
 
 static void bios_out(uint8_t ch) {
+    /* Write to JTAG non-blocking. With BIOS_TX_BUF=1024 the driver
+     * buffers a full row + headroom, and idf.py monitor drains the
+     * USB endpoint quickly enough that dropped chars are rare. We
+     * cannot block: in QEMU there's no USB host draining the TX
+     * buffer, so a blocking write would freeze the entire emulator
+     * the moment the driver buffer fills. */
+    usb_serial_jtag_write_bytes(&ch, 1, 0);
+
+#ifdef ESPDOS_LOG_OUT
     if (ch == '\r' || ch == '\n') {
         bios_out_flush();
         return;
     }
-    if (ch < 0x20) {
+    /* Skip most control chars (< 0x20) for the log mirror, but pass
+     * ESC (0x1B) so the captured log still shows the ANSI bytes. */
+    if (ch < 0x20 && ch != 0x1B) {
         return;
     }
     if (bios_out_len >= BIOS_OUT_BUF - 1) {
         bios_out_flush();
     }
     bios_out_line[bios_out_len++] = (char)ch;
+#endif
 }
 
 

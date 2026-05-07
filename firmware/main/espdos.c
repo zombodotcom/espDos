@@ -119,6 +119,9 @@ void app_main(void)
 #elif defined(ESPDOS_LOADER_SHELL)
     extern const uint8_t bootstub_bin_start[] asm("_binary_bootstub_shell_bin_start");
     extern const uint8_t bootstub_bin_end[]   asm("_binary_bootstub_shell_bin_end");
+#elif defined(ESPDOS_LOADER_JULIA)
+    extern const uint8_t bootstub_bin_start[] asm("_binary_bootstub_julia_bin_start");
+    extern const uint8_t bootstub_bin_end[]   asm("_binary_bootstub_julia_bin_end");
 #else
     extern const uint8_t bootstub_bin_start[] asm("_binary_bootstub_mandel_bin_start");
     extern const uint8_t bootstub_bin_end[]   asm("_binary_bootstub_mandel_bin_end");
