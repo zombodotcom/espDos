@@ -6,6 +6,15 @@
 
 CONFIG_IDF_TARGET="esp32s3"
 
+# Performance: -O2 + 240 MHz CPU. The 8086 interpreter loop in
+# esp8086.c is the hot path for every transient, and it benefits
+# 2-2.5x from -O2 inlining + jump-threading the 256-way opcode
+# switch. The S3 supports 240 MHz at no additional power cost worth
+# worrying about for this demo.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
+
 # Enable PSRAM. Octal mode (8-line) is the T-Display-S3 default.
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
