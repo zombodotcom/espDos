@@ -14,16 +14,24 @@ shim that traps far-calls to `BIOSSEG` (0x0040) for console + disk, and
 loads its own `.COM` files off a FAT12 image flashed into a partition.
 
 It boots, prints the original banner, accepts the date prompt, and
-hands control to whichever transient you picked. Six ship today:
+drops into a typed `A>` prompt where you can launch any of the
+ship-with .COM files (or any other you put on the disk image).
 
-| Program     | Bytes | What it does                                      |
-|-------------|------:|---------------------------------------------------|
-| `HELLO.COM` |   232 | Banner box                                        |
-| `COUNT.COM` |    71 | Prints 1..50 in decimal (AAM / DIV demo)          |
-| `MANDEL.COM`|   450 | Q4.12 fixed-point ASCII Mandelbrot, 78×24         |
-| `JULIA.COM` |  1082 | 16-color animated Julia set, c walks a circle    |
-| `LIFE.COM`  |  1029 | Conway's Game of Life, 80 generations, colored   |
-| `SHELL.COM` |   443 | Interactive menu; re-entry on `INT 20h` from kids |
+| Program     | Bytes | What it does                                                         |
+|-------------|------:|----------------------------------------------------------------------|
+| `HELLO.COM` |   232 | Banner box                                                           |
+| `COUNT.COM` |    71 | Prints 1..50 in decimal (AAM / DIV demo)                             |
+| `MANDEL.COM`|   450 | Q4.12 fixed-point ASCII Mandelbrot, 78×24                            |
+| `JULIA.COM` |  1082 | 16-color animated Julia set, c walks a circle                        |
+| `LIFE.COM`  |  1058 | Conway's Game of Life, 200 generations, colored                      |
+| `SHELL.COM` |   990 | Typed-prompt command processor: `A>NAME`<Enter> → FCB OPEN + SEQRD   |
+
+Built-in commands inside SHELL today: `EXIT` (clean halt). Anything
+else is treated as a program name — SHELL appends `.COM` if you didn't,
+walks the FCB OPEN/SEQRD path through the unmodified kernel, and JMPs
+into the loaded image. Phase B will add the rest of the DOS-1.0
+internals (`DIR`, `TYPE`, `DEL`, `REN`, `COPY`, `CLS`, `VER`,
+`DATE`, `TIME`).
 
 Everything happens inside the unmodified 86-DOS kernel — `INT 21h`, the
 1981 DISPATCH table, the original FAT12 file ops. The shell is itself
@@ -32,25 +40,21 @@ same way it would any program.
 
 ## What it looks like
 
-Boot, banner, date prompt (auto-fed `1-1-80`), shell menu — byte-for-byte
-captured from a host run of the same kernel + transients:
+Boot, banner, date prompt (auto-fed `1-1-80`), then SHELL drops you at
+an `A>` prompt:
 
 ```
 86-DOS version 1.00
 Copyright 1980,81 Seattle Computer Products, Inc.
 Enter today's date (m-d-y): 1-1-80
 
-espDos shell
-  1) HELLO   - banner
-  2) COUNT   - 1..50
-  3) MANDEL  - ASCII fractal
-  4) JULIA   - color animated set
-  5) LIFE    - Conways Game of Life
-  q) quit
-> _
+espDos - 86-DOS Version 1.00
+
+A>_
 ```
 
-`1` runs `HELLO.COM`:
+Type a program name (case-insensitive, `.COM` optional) and press Enter.
+`HELLO` runs `HELLO.COM`:
 
 ```
 +----------------------------------------+
@@ -60,7 +64,7 @@ espDos shell
 +----------------------------------------+
 ```
 
-`2` runs `COUNT.COM`:
+`COUNT` runs `COUNT.COM`:
 
 ```
 01 02 03 04 05 06 07 08 09 10
@@ -70,7 +74,7 @@ espDos shell
 41 42 43 44 45 46 47 48 49 50
 ```
 
-`3` runs `MANDEL.COM` — Q4.12 fixed-point Mandelbrot, 78 × 24 ASCII,
+`MANDEL` runs `MANDEL.COM` — Q4.12 fixed-point Mandelbrot, 78 × 24 ASCII,
 ramp `' .:-=+*#%@'`. Cardioid + period-2 disk early-reject means the
 big black blob is detected without iterating; everything else escapes
 under the 24-iter cap and gets a density character. Render time on
@@ -103,7 +107,7 @@ hardware: ~1.2 s after the perf flags.
              ::-+..-::.::..::#:........::::::....==:::-:-++@+*@=-:-:..=:::....
 ```
 
-`4` runs `JULIA.COM` — same Q4.12 IMUL kernel, but `c` walks a 30-step
+`JULIA` runs `JULIA.COM` — same Q4.12 IMUL kernel, but `c` walks a 30-step
 circle of radius 0.7885 around the origin while `z₀` varies per pixel.
 Each pixel emits an `ESC[NNm` ANSI color escape + density char (~6
 bytes/pixel); frames are separated by `ESC[H` (cursor home) so a real
@@ -113,7 +117,7 @@ animation walks the c-orbit — markdown can't show the color, but you
 can imagine the same shape as MANDEL above with a per-pixel hue ramp
 that morphs frame-to-frame.
 
-`5` runs `LIFE.COM` — Conway's Game of Life on a 78 × 24 toroidal
+`LIFE` runs `LIFE.COM` — Conway's Game of Life on a 78 × 24 toroidal
 grid, 200 generations. The seed is a 16-bit LCG'd ~25% density (about
 470 alive cells at gen 0) so each run starts from real chaos. Cells
 are encoded as long-dead / just-died / long-alive / newborn so the
@@ -124,8 +128,10 @@ visually track through gliders, oscillators, and the chaotic decay
 of dense regions.
 
 After any of the children does `INT 20h`, control returns to SHELL
-(via an IVT[20h] swap installed before launch) and the menu reprints
-— `q` halts cleanly.
+(via an IVT[20h] swap installed before launch) and the `A>` prompt
+reprints — `EXIT` halts cleanly. Unrecognized names print
+`Bad command or filename` and re-prompt; backspace edits the line;
+Ctrl-C cancels the current line.
 
 ## What you need
 
@@ -186,9 +192,10 @@ idf.py fullclean
 idf.py build flash monitor
 ```
 
-The default boot is **SHELL.COM** — interactive menu over USB-Serial-JTAG.
-Type `1`-`5` to launch HELLO / COUNT / MANDEL / JULIA / LIFE; after each
-child returns via `INT 20h`, SHELL reprints the menu. `q` halts cleanly.
+The default boot is **SHELL.COM** — typed `A>` prompt over
+USB-Serial-JTAG. Type a program name + Enter to launch
+(`HELLO` / `COUNT` / `MANDEL` / `JULIA` / `LIFE`). After each child
+returns via `INT 20h`, SHELL re-prints `A>`. `EXIT` halts cleanly.
 
 `Ctrl-]` exits the monitor; `Ctrl-T Ctrl-R` resets the board.
 
@@ -210,11 +217,15 @@ subpixel rendering — color fringes on edges are expected, that's how
 | Copyright 1980,81 Seattle Computer Products, Inc.   |     (color fringes on glyph
 | Enter today's date (m-d-y): 1-1-80                  |      edges expected — that's
 |                                                     |      the subpixel rendering
-| espDos shell                                        |      working)
-|   1) HELLO   - banner                               |
-|   2) COUNT   - 1..50                                |
-|   3) MANDEL  - ASCII fractal                        |
-|   4) JULIA   - color animated set                   |
+| espDos - 86-DOS Version 1.00                        |      working)
+|                                                     |
+| A>HELLO                                             |
+| +----------------------------------------+          |
+| |  Hello, World!                         |          |
+| |  This is HELLO.COM running on espDos:  |          |
+| |  Tim Paterson 86-DOS 1.00, on ESP32-C5 |          |
+| +----------------------------------------+          |
+| A>                                                  |
 +-----------------------------------------------------+
 ```
 
@@ -232,7 +243,7 @@ Toggle off with `idf.py menuconfig` → "espDos display" → uncheck
 | `-DESPDOS_LOADER_JULIA=1`     | Boot directly into JULIA.COM (skip SHELL)     |
 | `-DESPDOS_LOADER_LIFE=1`      | Boot directly into LIFE.COM (skip SHELL)      |
 | `-DESPDOS_LOADER_SHELL=1`     | Explicit SHELL.COM (default; flag is a no-op alias) |
-| `-DESPDOS_AUTOPICK=N`         | Pre-feed digit N to SHELL (for QEMU testing)  |
+| `-DESPDOS_AUTOPICK=NAME`      | Pre-feed `NAME\r` to SHELL after the date prompt (auto-launches that .COM; for QEMU/CI runs) |
 | `-DESPDOS_INTERACTIVE_DATE=1` | Type the date yourself instead of auto-feed   |
 | `-DESPDOS_LOG_OUT=1`          | Mirror BIOSOUT through `ESP_LOGI` (QEMU debug)|
 | `-DESPDOS_HEARTBEAT=1`        | Per-beat instruction-count log (debug)        |
@@ -283,16 +294,19 @@ fractal optimization are in `docs/mandelbrot-performance.md`.
 cd tests/emu && mingw32-make run
 ```
 
-9 host tests, each running the same `esp8086.c` the firmware uses,
+13 host tests, each running the same `esp8086.c` the firmware uses,
 exercising it from a small C harness with stub BIOS handlers:
 
-- `test_emu_basic`     — opcode decoder + register file
+- `test_jmp_near` / `test_kernel_first_step` — opcode decoder + register file
 - `test_memory_bounds` — full 1 MB span + REGS_BASE alignment
 - `test_kernel_banner` — kernel runs to date prompt; banner byte-exact
-- `test_loader`        — bootstub + loader load HELLO; "Hello, World!" appears
-- `test_mandel`        — full 78×24 Mandelbrot grid renders
+- `test_bootstub` / `test_loader` — bootstub + loader load HELLO
+- `test_hello`         — "Hello, World!" appears end-to-end
+- `test_mandel` / `test_julia` — Mandelbrot + Julia render correctly
 - `test_fininit_stack` — stack layout at FININIT exit (drove the loader design)
-- `test_disk_*`        — FAT12 read paths
+- `test_display_ansi_strip` — ANSI escape stripper state machine
+- `test_display_ring_buffer` — 9-row scrolling log rotation
+- `test_subpixel_glyph_table` — Spleen 6×8 → BGR subpixel table cross-check
 
 ## Why this exists
 
