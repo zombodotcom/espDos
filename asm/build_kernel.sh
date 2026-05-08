@@ -172,8 +172,8 @@ nasm -f bin \
 rm -f "$OUT_DIR/bootstub_count.asm.tmp"
 echo "Built: $OUT_DIR/bootstub_count.bin ($(wc -c < "$OUT_DIR/bootstub_count.bin") bytes)"
 
-# Transient JULIA.COM — animated 16-color Julia set. Cluster 6
-# (sectors 15..17 — 1082 bytes spans 3 sectors). Same Q4.12 IMUL
+# Transient JULIA.COM — animated 16-color Julia set. Cluster 7
+# (sectors 16..18 — 1082 bytes spans 3 sectors). Same Q4.12 IMUL
 # kernel as MANDEL.COM but with z0=pixel and c=animation parameter,
 # plus ANSI 16-color output.
 nasm -f bin \
@@ -182,7 +182,7 @@ nasm -f bin \
      "$SCRIPT_DIR/julia.asm"
 echo "Built: $OUT_DIR/julia.bin ($(wc -c < "$OUT_DIR/julia.bin") bytes)"
 
-JULIA_SECTOR=15
+JULIA_SECTOR=16
 JULIA_COUNT=3
 nasm -f bin \
      -D"LOADER_OFFSET=$LOADER_OFF" \
@@ -208,7 +208,7 @@ rm -f "$OUT_DIR/bootstub_julia.asm.tmp"
 echo "Built: $OUT_DIR/bootstub_julia.bin ($(wc -c < "$OUT_DIR/bootstub_julia.bin") bytes)"
 
 # Transient LIFE.COM — Conway's Game of Life with color cycling.
-# Cluster 7 (sectors 18..19 — ~1KB so 2 sectors). Same toroidal
+# Cluster 10 (sectors 19..20 — ~1KB so 2 sectors). Same toroidal
 # 78x24 grid as the other ASCII transients. Generations animate via
 # ESC[H frame separator.
 nasm -f bin \
@@ -217,7 +217,7 @@ nasm -f bin \
      "$SCRIPT_DIR/life.asm"
 echo "Built: $OUT_DIR/life.bin ($(wc -c < "$OUT_DIR/life.bin") bytes)"
 
-LIFE_SECTOR=18
+LIFE_SECTOR=19
 LIFE_COUNT=2
 nasm -f bin \
      -D"LOADER_OFFSET=$LOADER_OFF" \
@@ -252,7 +252,9 @@ nasm -f bin \
 echo "Built: $OUT_DIR/shell.bin ($(wc -c < "$OUT_DIR/shell.bin") bytes)"
 
 SHELL_SECTOR=14
-SHELL_COUNT=1
+SHELL_COUNT=2                         # ~990 bytes -> 2 sectors. Bump
+                                      # to 3 if SHELL.COM ever grows
+                                      # past 1024 bytes again.
 nasm -f bin \
      -D"LOADER_OFFSET=$LOADER_OFF" \
      -D"LOAD_SECTOR=$SHELL_SECTOR" \
