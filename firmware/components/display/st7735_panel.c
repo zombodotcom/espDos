@@ -45,6 +45,11 @@
 #define PIN_LCD_RST           1
 #define PIN_LCD_BL            0
 #define PIN_SD_CS             23
+/* T-Dongle-C5 has a 1-pixel APA102 RGB LED on GPIO 4/5. Left
+ * undriven, it latches noise from neighboring traces and blinks
+ * distractingly. We send one all-off frame at boot to silence it. */
+#define PIN_LED_CI            4
+#define PIN_LED_DI            5
 #define LCD_SPI_HZ            (40 * 1000 * 1000)
 
 /* ST7735 commands. */
@@ -192,9 +197,47 @@ static void deselect_sd_card(void) {
     gpio_set_level(PIN_SD_CS, 1);
 }
 
+/* Bit-bang one byte to the APA102 (clock idle low, sample on rising
+ * edge, MSB first). No timing-critical bits — the part runs happily
+ * up to 20 MHz, our toggles are well under that. */
+static void apa102_byte(uint8_t b) {
+    for (int i = 7; i >= 0; i--) {
+        gpio_set_level(PIN_LED_DI, (b >> i) & 1);
+        gpio_set_level(PIN_LED_CI, 1);
+        gpio_set_level(PIN_LED_CI, 0);
+    }
+}
+
+/* Drive the onboard LED to fully off. APA102 frame format:
+ *   start = 4 bytes of 0x00
+ *   per LED = 0b111 + 5-bit brightness, then B, G, R bytes
+ *   end = at least N/2 clock edges with DI high (N = LED count)
+ * For our 1-pixel strip: brightness 0 + zero color, then 1 end byte. */
+static void silence_apa102_led(void) {
+    gpio_config_t cfg = {
+        .pin_bit_mask = (1ULL << PIN_LED_CI) | (1ULL << PIN_LED_DI),
+        .mode = GPIO_MODE_OUTPUT,
+    };
+    gpio_config(&cfg);
+    gpio_set_level(PIN_LED_CI, 0);
+    gpio_set_level(PIN_LED_DI, 0);
+
+    apa102_byte(0x00); apa102_byte(0x00);
+    apa102_byte(0x00); apa102_byte(0x00);          /* start frame */
+    apa102_byte(0xE0);                              /* 0b111 + brightness 0 */
+    apa102_byte(0x00); apa102_byte(0x00); apa102_byte(0x00);
+    apa102_byte(0xFF);                              /* end frame (>= 1 byte for N=1) */
+
+    /* Park both lines low so any remaining noise can't shift in extra bits. */
+    gpio_set_level(PIN_LED_CI, 0);
+    gpio_set_level(PIN_LED_DI, 0);
+}
+
 esp_err_t st7735_init(void) {
-    /* 1. Deselect the SD card so it stays off the shared SPI bus. */
+    /* 1. Deselect the SD card so it stays off the shared SPI bus
+     *    and silence the APA102 LED so it doesn't flicker noise. */
     deselect_sd_card();
+    silence_apa102_led();
 
     /* 2. Configure CS, DC, RST as GPIOs we drive directly. The driver
      * does its own CS toggling rather than relying on SPI hardware
