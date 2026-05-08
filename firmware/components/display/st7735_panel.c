@@ -208,29 +208,40 @@ static void apa102_byte(uint8_t b) {
     }
 }
 
-/* Drive the onboard LED to fully off. APA102 frame format:
+/* Send one all-off APA102 frame for our 1-pixel strip. APA102 format:
  *   start = 4 bytes of 0x00
  *   per LED = 0b111 + 5-bit brightness, then B, G, R bytes
  *   end = at least N/2 clock edges with DI high (N = LED count)
- * For our 1-pixel strip: brightness 0 + zero color, then 1 end byte. */
-static void silence_apa102_led(void) {
-    gpio_config_t cfg = {
-        .pin_bit_mask = (1ULL << PIN_LED_CI) | (1ULL << PIN_LED_DI),
-        .mode = GPIO_MODE_OUTPUT,
-    };
-    gpio_config(&cfg);
-    gpio_set_level(PIN_LED_CI, 0);
-    gpio_set_level(PIN_LED_DI, 0);
-
+ * Cheap (~50 us at our GPIO rate); designed to be called repeatedly
+ * after each SPI burst — see st7735_draw_rows below. */
+static void apa102_off_frame(void) {
     apa102_byte(0x00); apa102_byte(0x00);
     apa102_byte(0x00); apa102_byte(0x00);          /* start frame */
     apa102_byte(0xE0);                              /* 0b111 + brightness 0 */
     apa102_byte(0x00); apa102_byte(0x00); apa102_byte(0x00);
     apa102_byte(0xFF);                              /* end frame (>= 1 byte for N=1) */
 
-    /* Park both lines low so any remaining noise can't shift in extra bits. */
+    /* Park both lines low so subsequent line noise can't shift extra bits. */
     gpio_set_level(PIN_LED_CI, 0);
     gpio_set_level(PIN_LED_DI, 0);
+}
+
+/* Configure the LED's CI/DI pins as outputs and send the first off
+ * frame. Highest drive strength so the lines hold against capacitive
+ * crosstalk from the adjacent 40 MHz LCD SPI signals (GPIO 2/3/6 are
+ * neighbors of GPIO 4/5 on the C5 — the SPI burst was inducing
+ * spurious clock edges on the LED that latched random colors). */
+static void silence_apa102_led(void) {
+    gpio_config_t cfg = {
+        .pin_bit_mask = (1ULL << PIN_LED_CI) | (1ULL << PIN_LED_DI),
+        .mode = GPIO_MODE_OUTPUT,
+    };
+    gpio_config(&cfg);
+    gpio_set_drive_capability(PIN_LED_CI, GPIO_DRIVE_CAP_3);
+    gpio_set_drive_capability(PIN_LED_DI, GPIO_DRIVE_CAP_3);
+    gpio_set_level(PIN_LED_CI, 0);
+    gpio_set_level(PIN_LED_DI, 0);
+    apa102_off_frame();
 }
 
 esp_err_t st7735_init(void) {
@@ -349,6 +360,12 @@ esp_err_t st7735_draw_rows(int y0, int y1, const uint16_t *pixels) {
         ESP_ERROR_CHECK(spi_device_polling_transmit(s_spi, &t));
     }
     cs_high();
+
+    /* Re-silence the APA102. The 40 MHz SPI burst we just finished
+     * couples capacitively onto GPIO 4/5 (the LED's CI/DI), shifting
+     * spurious bits in. One off-frame (~50 us) right after each draw
+     * masks the visual flash to well under perception threshold. */
+    apa102_off_frame();
     return ESP_OK;
 }
 
