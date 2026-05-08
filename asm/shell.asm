@@ -597,10 +597,442 @@ external_load:
     ret
 
 ; -----------------------------------------------------------------
-; do_exit — EXIT command handler. Tail-jumps to quit, which restores
-; the loader's IVT[20h] and INT 20h's into the bootstub halt loop.
+; Built-in command handlers. Each is invoked via `call ax` from
+; dispatch with DS = ES = CS. Returning lets dispatch tag CF=1 so
+; the caller re-prompts. Handlers that don't want to return (EXIT)
+; jmp to quit / shell_loop instead.
+
+; EXIT — tail-jump to quit; restores loader IVT[20h] + INT 20h halts.
 do_exit:
     jmp  quit
+
+; CLS — ANSI: ESC[2J ESC[H. Both the USB-Serial-JTAG terminal and the
+; C5 display_log component understand these escapes.
+do_cls:
+    mov  dx, cls_str
+    jmp  print_str
+
+; VER — print the version banner.
+do_ver:
+    mov  dx, ver_str
+    jmp  print_str
+
+; DATE / TIME — kernel dispatch only goes up to function 41 (MAKEFCB);
+; the date/time calls (2Ah-2Dh) landed in 86-DOS 1.10. Print a note
+; so users understand the limitation rather than guessing why.
+do_date_time:
+    mov  dx, date_time_str
+    jmp  print_str
+
+; DIR — list every file in the root directory.
+;
+; Pipeline:
+;   1. Build a wildcard FCB at fcb_buf (drive=0, name+ext = 11 '?').
+;   2. SETDMA -> dir_buf so the kernel writes the matching entry there.
+;   3. SRCHFRST (call 11h); on AL=0xFF print "File not found".
+;   4. Print row: 8-char name + ' ' + 3-char ext + spaces + size + CRLF.
+;   5. SRCHNXT (call 12h) until AL=0xFF.
+;
+; Args after DIR are ignored for now — the wildcard pattern always
+; matches everything. Pattern parsing (DIR *.COM, DIR FOO) is a
+; future iteration.
+do_dir:
+    push si
+    push di
+
+    ; Build wildcard FCB (drive=0, 11 '?' across name+ext, rest zero).
+    mov  di, fcb_buf
+    push di
+    mov  cx, 18
+    xor  ax, ax
+    rep  stosw                   ; zero 36 bytes
+    pop  di
+    inc  di                      ; skip drive byte (already 0)
+    mov  cx, 11
+    mov  al, '?'
+    rep  stosb
+
+    ; SETDMA(DS:DX = dir_buf). DS is already CS=USER_SEG.
+    mov  dx, dir_buf
+    mov  ah, 0x1A
+    int  0x21
+
+    ; SRCHFRST.
+    mov  dx, fcb_buf
+    mov  ah, 0x11
+    int  0x21
+    test al, al
+    jnz  .none
+
+.list_loop:
+    ; Print 8-char name from dir_buf[0..7].
+    mov  cx, 8
+    mov  si, dir_buf
+.name_out:
+    mov  dl, [si]
+    inc  si
+    mov  ah, 0x06
+    int  0x21
+    loop .name_out
+
+    mov  dl, ' '
+    mov  ah, 0x06
+    int  0x21
+
+    ; Print 3-char ext from dir_buf[8..10].
+    mov  cx, 3
+    mov  si, dir_buf + 8
+.ext_out:
+    mov  dl, [si]
+    inc  si
+    mov  ah, 0x06
+    int  0x21
+    loop .ext_out
+
+    ; Two spaces before size.
+    mov  dl, ' '
+    mov  ah, 0x06
+    int  0x21
+    mov  dl, ' '
+    mov  ah, 0x06
+    int  0x21
+
+    ; Size from dir_buf[28..29] (low 16 bits — our files are < 64KB).
+    mov  ax, [dir_buf + 28]
+    call print_dec
+
+    ; CRLF.
+    mov  dl, 0x0D
+    mov  ah, 0x06
+    int  0x21
+    mov  dl, 0x0A
+    mov  ah, 0x06
+    int  0x21
+
+    ; SRCHNXT.
+    mov  dx, fcb_buf
+    mov  ah, 0x12
+    int  0x21
+    test al, al
+    jz   .list_loop
+
+    pop  di
+    pop  si
+    ret
+
+.none:
+    mov  dx, file_not_found_msg
+    call print_str
+    pop  di
+    pop  si
+    ret
+
+; DEL / ERASE — remove a file from the directory. INT 21h call 13h.
+;
+; Pipeline: name_to_fcb on tail_ptr -> fcb_buf, then DELETE.
+; AL=0 success, AL=0xFF if no file matched the FCB pattern (note:
+; kernel's DELETE supports wildcards; we don't filter them out).
+do_del:
+    push si
+    push di
+    mov  si, [tail_ptr]
+    mov  di, fcb_buf
+    call name_to_fcb
+    jc   .no_arg
+    mov  dx, fcb_buf
+    mov  ah, 0x13
+    int  0x21
+    test al, al
+    jnz  .not_found
+    pop  di
+    pop  si
+    ret
+.not_found:
+    mov  dx, file_not_found_msg
+    call print_str
+    pop  di
+    pop  si
+    ret
+.no_arg:
+    mov  dx, no_arg_msg
+    call print_str
+    pop  di
+    pop  si
+    ret
+
+; REN — rename old to new. INT 21h call 17h.
+;
+; Kernel expects a "rename FCB": old name at fcb_buf[0..11], new name
+; at fcb_buf[16..27]. We call name_to_fcb twice — first on fcb_buf for
+; the old name (advances SI past it), then on fcb_buf+16 for the new
+; name. name_to_fcb zeroes 36 bytes per call, so the two calls together
+; touch fcb_buf[0..51]; that's why fcb_buf is sized 64.
+do_ren:
+    push si
+    push di
+    mov  si, [tail_ptr]
+    mov  di, fcb_buf
+    call name_to_fcb
+    jc   .no_arg
+    mov  di, fcb_buf + 16
+    call name_to_fcb
+    jc   .no_arg
+    mov  dx, fcb_buf
+    mov  ah, 0x17
+    int  0x21
+    test al, al
+    jnz  .not_found
+    pop  di
+    pop  si
+    ret
+.not_found:
+    mov  dx, file_not_found_msg
+    call print_str
+    pop  di
+    pop  si
+    ret
+.no_arg:
+    mov  dx, no_arg_msg
+    call print_str
+    pop  di
+    pop  si
+    ret
+
+; TYPE — read a file and dump its bytes to the console.
+;
+; Pipeline:
+;   1. name_to_fcb on tail_ptr -> fcb_buf.
+;   2. OPEN (call 0Fh). On AL!=0 print "File not found".
+;   3. SETDMA(type_buf, 128 bytes) once.
+;   4. Loop SEQRD (call 14h). For each record (full or partial),
+;      output bytes via AH=02h (CONOUT). Stop at first 0x1A
+;      (Ctrl-Z = period-correct DOS EOF marker) or when SEQRD
+;      reports AL=1 (partial last record) / AL=3 (EOF, no data).
+;   5. We use AH=02h instead of AH=06h here because RAWIO interprets
+;      DL=0xFF as "input request"; TYPE on a binary file hits 0xFF
+;      bytes legitimately and AH=02h outputs them verbatim.
+do_type:
+    push si
+    push di
+    mov  si, [tail_ptr]
+    mov  di, fcb_buf
+    call name_to_fcb
+    jc   .no_arg
+
+    ; OPEN.
+    mov  dx, fcb_buf
+    mov  ah, 0x0F
+    int  0x21
+    test al, al
+    jnz  .not_found
+
+    ; SETDMA -> type_buf.
+    mov  dx, type_buf
+    mov  ah, 0x1A
+    int  0x21
+
+.read_loop:
+    mov  dx, fcb_buf
+    mov  ah, 0x14
+    int  0x21
+    cmp  al, 1
+    je   .last_record
+    cmp  al, 3
+    je   .done
+    test al, al
+    jnz  .done                   ; AL=2 segment overflow — stop
+
+    ; Full 128-byte record. Output until first 0x1A.
+    mov  cx, 128
+    mov  si, type_buf
+.full_loop:
+    mov  dl, [si]
+    cmp  dl, 0x1A
+    je   .done
+    inc  si
+    mov  ah, 0x02
+    int  0x21
+    loop .full_loop
+    jmp  .read_loop
+
+.last_record:
+    ; Partial record — kernel zero-fills past EOF. Output until first
+    ; 0x1A or NUL.
+    mov  cx, 128
+    mov  si, type_buf
+.partial_loop:
+    mov  dl, [si]
+    cmp  dl, 0x1A
+    je   .done
+    test dl, dl
+    jz   .done
+    inc  si
+    mov  ah, 0x02
+    int  0x21
+    loop .partial_loop
+
+.done:
+    pop  di
+    pop  si
+    ret
+
+.not_found:
+    mov  dx, file_not_found_msg
+    call print_str
+    pop  di
+    pop  si
+    ret
+
+.no_arg:
+    mov  dx, no_arg_msg
+    call print_str
+    pop  di
+    pop  si
+    ret
+
+; COPY — read src, create dst, stream records from src to dst.
+;
+; Pipeline:
+;   1. name_to_fcb(src) -> fcb_buf, name_to_fcb(dst) -> dst_fcb_buf
+;   2. OPEN src; CREATE dst (truncates existing dst silently — same as
+;      classic DOS COPY).
+;   3. SETDMA -> type_buf (one fixed 128-byte staging buffer).
+;   4. Loop: SEQRD(src) writes 128 bytes into type_buf; SEQWRT(dst)
+;      reads them back out from type_buf and writes to disk.
+;      AL=1 (partial last record from src) -> still SEQWRT the full
+;      128 bytes (dst rounds up to record-size, like real DOS COPY
+;      with default RECSIZ=128); then stop.
+;      AL=3 (EOF, no data) -> stop.
+;   5. CLOSE dst to flush its directory entry.
+do_copy:
+    push si
+    push di
+
+    ; Parse src into fcb_buf.
+    mov  si, [tail_ptr]
+    mov  di, fcb_buf
+    call name_to_fcb
+    jc   .no_arg
+
+    ; Parse dst into dst_fcb_buf (SI is past src after first call).
+    mov  di, dst_fcb_buf
+    call name_to_fcb
+    jc   .no_arg
+
+    ; OPEN src.
+    mov  dx, fcb_buf
+    mov  ah, 0x0F
+    int  0x21
+    test al, al
+    jnz  .not_found
+
+    ; CREATE dst (truncates if exists; AL=0xFF if dir full).
+    mov  dx, dst_fcb_buf
+    mov  ah, 0x16
+    int  0x21
+    test al, al
+    jnz  .create_failed
+
+    ; SETDMA -> type_buf for both reads and writes.
+    mov  dx, type_buf
+    mov  ah, 0x1A
+    int  0x21
+
+.read_loop:
+    mov  dx, fcb_buf
+    mov  ah, 0x14
+    int  0x21
+    cmp  al, 1
+    je   .last
+    cmp  al, 3
+    je   .close_dst
+    test al, al
+    jnz  .copy_failed            ; AL=2 segment overflow
+
+    ; Full record copied. SEQWRT to dst.
+    mov  dx, dst_fcb_buf
+    mov  ah, 0x15
+    int  0x21
+    test al, al
+    jnz  .copy_failed
+    jmp  .read_loop
+
+.last:
+    ; Partial last record. Write the full 128 bytes anyway —
+    ; the kernel zero-pads past EOF, which is the documented
+    ; rounding-up behavior for default-RECSIZ COPY.
+    mov  dx, dst_fcb_buf
+    mov  ah, 0x15
+    int  0x21
+
+.close_dst:
+    ; CLOSE dst so its directory entry is flushed.
+    mov  dx, dst_fcb_buf
+    mov  ah, 0x10
+    int  0x21
+    pop  di
+    pop  si
+    ret
+
+.not_found:
+    mov  dx, file_not_found_msg
+    call print_str
+    pop  di
+    pop  si
+    ret
+
+.create_failed:
+.copy_failed:
+    mov  dx, copy_failed_msg
+    call print_str
+    pop  di
+    pop  si
+    ret
+
+.no_arg:
+    mov  dx, no_arg_msg
+    call print_str
+    pop  di
+    pop  si
+    ret
+
+; print_dec — print AX as unsigned decimal, right-aligned in 6 cols
+; (uses dec_buf as a scratch-then-print buffer).
+print_dec:
+    push ax
+    push bx
+    push cx
+    push dx
+    ; Pre-fill dec_buf with 6 spaces (terminator at offset 6 stays).
+    mov  byte [dec_buf + 0], ' '
+    mov  byte [dec_buf + 1], ' '
+    mov  byte [dec_buf + 2], ' '
+    mov  byte [dec_buf + 3], ' '
+    mov  byte [dec_buf + 4], ' '
+    mov  byte [dec_buf + 5], ' '
+    mov  bx, dec_buf + 5         ; rightmost slot
+    test ax, ax
+    jnz  .div_loop
+    mov  byte [bx], '0'
+    jmp  .out
+.div_loop:
+    test ax, ax
+    jz   .out
+    xor  dx, dx
+    mov  cx, 10
+    div  cx                      ; AX /= 10, DX = digit
+    add  dl, '0'
+    mov  [bx], dl
+    dec  bx
+    jmp  .div_loop
+.out:
+    mov  dx, dec_buf
+    call print_str
+    pop  dx
+    pop  cx
+    pop  bx
+    pop  ax
+    ret
 
 banner_str:
     db 0x0D, 0x0A
@@ -616,15 +1048,53 @@ between:
 bad_cmd_msg:
     db 'Bad command or filename', 0x0D, 0x0A, '$'
 
+cls_str:
+    db 0x1B, '[2J', 0x1B, '[H', '$'
+
+ver_str:
+    db 'espDos - 86-DOS Version 1.00', 0x0D, 0x0A, '$'
+
+date_time_str:
+    db 'Not supported in 86-DOS 1.00 (added in 1.10)', 0x0D, 0x0A, '$'
+
+file_not_found_msg:
+    db 'File not found', 0x0D, 0x0A, '$'
+
+no_arg_msg:
+    db 'Required parameter missing', 0x0D, 0x0A, '$'
+
+copy_failed_msg:
+    db 'Copy failed', 0x0D, 0x0A, '$'
+
+dec_buf:
+    db '      $'                  ; 6 spaces + $; print_dec fills digits
+
 prev_int20_off:    dw 0
 prev_int20_seg:    dw 0
 shell_sp_save:     dw 0
 dma_offset:        dw 0          ; running DTA for SEQRD-into-CHILD_SEG
 
-; FCB working buffer for OPEN/SEQRD/etc. 36 bytes covers the standard
-; layout (drive(1) + name(8) + ext(3) + reserved(20) + current_record(1)
-; with slack).
-fcb_buf:           times 36 db 0
+; FCB working buffer for OPEN/SEQRD/etc. 64 bytes covers the standard
+; layout (drive(1) + name(8) + ext(3) + reserved(20) + current_record(1))
+; *plus* the dual-FCB layout RENAME needs (old name at 0..11, new name
+; at 16..27) — name_to_fcb's per-call 36-byte zero overlaps from offset
+; 16 to offset 51, so fcb_buf has to be at least 52 bytes; 64 gives
+; slack for any kernel-internal use we missed.
+fcb_buf:           times 64 db 0
+
+; DTA scratch for SRCHFRST/SRCHNXT — kernel writes one 32-byte
+; directory entry here per match (name(8), ext(3), attr(1), reserved(10),
+; time(2), date(2), cluster(2), size(4)).
+dir_buf:           times 32 db 0
+
+; SEQRD scratch for TYPE / COPY — one 128-byte record per call.
+type_buf:          times 128 db 0
+
+; Second FCB for COPY's destination — 36 bytes is the standard
+; opened-FCB size. (RENAME packs both names into one fcb_buf via
+; the 0/16 offset trick; COPY can't because src and dst are
+; independently OPEN/CREATE'd and each maintains its own NEXTREC.)
+dst_fcb_buf:       times 36 db 0
 
 ; Static input buffer for read_line. Sized to DOS-classic line length
 ; plus one for the null terminator.
@@ -641,6 +1111,26 @@ tail_ptr:          dw 0
 ; cmd_buf (which parse_command upper-cases on entry).
 command_table:
     dw  cmd_exit_str, do_exit
+    dw  cmd_cls_str,  do_cls
+    dw  cmd_ver_str,  do_ver
+    dw  cmd_date_str, do_date_time
+    dw  cmd_time_str, do_date_time
+    dw  cmd_dir_str,   do_dir
+    dw  cmd_type_str,  do_type
+    dw  cmd_del_str,   do_del
+    dw  cmd_erase_str, do_del         ; ERASE = alias for DEL
+    dw  cmd_ren_str,   do_ren
+    dw  cmd_copy_str,  do_copy
     dw  0, 0
 
 cmd_exit_str:      db 'EXIT', 0
+cmd_cls_str:       db 'CLS', 0
+cmd_ver_str:       db 'VER', 0
+cmd_date_str:      db 'DATE', 0
+cmd_time_str:      db 'TIME', 0
+cmd_dir_str:       db 'DIR', 0
+cmd_type_str:      db 'TYPE', 0
+cmd_del_str:       db 'DEL', 0
+cmd_erase_str:     db 'ERASE', 0
+cmd_ren_str:       db 'REN', 0
+cmd_copy_str:      db 'COPY', 0

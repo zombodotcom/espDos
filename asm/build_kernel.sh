@@ -172,8 +172,8 @@ nasm -f bin \
 rm -f "$OUT_DIR/bootstub_count.asm.tmp"
 echo "Built: $OUT_DIR/bootstub_count.bin ($(wc -c < "$OUT_DIR/bootstub_count.bin") bytes)"
 
-# Transient JULIA.COM — animated 16-color Julia set. Cluster 7
-# (sectors 16..18 — 1082 bytes spans 3 sectors). Same Q4.12 IMUL
+# Transient JULIA.COM — animated 16-color Julia set. Cluster 9
+# (sectors 18..20 — 1082 bytes spans 3 sectors). Same Q4.12 IMUL
 # kernel as MANDEL.COM but with z0=pixel and c=animation parameter,
 # plus ANSI 16-color output.
 nasm -f bin \
@@ -182,7 +182,7 @@ nasm -f bin \
      "$SCRIPT_DIR/julia.asm"
 echo "Built: $OUT_DIR/julia.bin ($(wc -c < "$OUT_DIR/julia.bin") bytes)"
 
-JULIA_SECTOR=16
+JULIA_SECTOR=18
 JULIA_COUNT=3
 nasm -f bin \
      -D"LOADER_OFFSET=$LOADER_OFF" \
@@ -208,7 +208,7 @@ rm -f "$OUT_DIR/bootstub_julia.asm.tmp"
 echo "Built: $OUT_DIR/bootstub_julia.bin ($(wc -c < "$OUT_DIR/bootstub_julia.bin") bytes)"
 
 # Transient LIFE.COM — Conway's Game of Life with color cycling.
-# Cluster 10 (sectors 19..20 — ~1KB so 2 sectors). Same toroidal
+# Cluster 12 (sectors 21..22 — ~1KB so 2 sectors). Same toroidal
 # 78x24 grid as the other ASCII transients. Generations animate via
 # ESC[H frame separator.
 nasm -f bin \
@@ -217,7 +217,7 @@ nasm -f bin \
      "$SCRIPT_DIR/life.asm"
 echo "Built: $OUT_DIR/life.bin ($(wc -c < "$OUT_DIR/life.bin") bytes)"
 
-LIFE_SECTOR=19
+LIFE_SECTOR=21
 LIFE_COUNT=2
 nasm -f bin \
      -D"LOADER_OFFSET=$LOADER_OFF" \
@@ -242,9 +242,10 @@ nasm -f bin \
 rm -f "$OUT_DIR/bootstub_life.asm.tmp"
 echo "Built: $OUT_DIR/bootstub_life.bin ($(wc -c < "$OUT_DIR/bootstub_life.bin") bytes)"
 
-# Transient SHELL.COM — interactive program selector. Cluster 5
-# (sector 14). When loaded by bootstub_shell.bin, prints a menu and
-# dispatches to HELLO/COUNT/MANDEL based on a single keystroke.
+# Transient SHELL.COM — typed-prompt command processor. Cluster 5
+# (sectors 14..17, 4 sectors reserved). bootstub_shell.bin loads it;
+# it prints "A>" and accepts typed program names + Enter (and built-ins
+# like EXIT/CLS/VER/DATE/TIME/DIR/TYPE).
 nasm -f bin \
      -o "$OUT_DIR/shell.bin" \
      -l "$OUT_DIR/shell.lst" \
@@ -252,9 +253,11 @@ nasm -f bin \
 echo "Built: $OUT_DIR/shell.bin ($(wc -c < "$OUT_DIR/shell.bin") bytes)"
 
 SHELL_SECTOR=14
-SHELL_COUNT=2                         # ~990 bytes -> 2 sectors. Bump
-                                      # to 3 if SHELL.COM ever grows
-                                      # past 1024 bytes again.
+SHELL_COUNT=4                         # SHELL grows through Phase B/C/D
+                                      # built-ins; reserve 4 sectors
+                                      # (~2KB cap) so we don't have to
+                                      # slide JULIA/LIFE again every
+                                      # time it crosses 512.
 nasm -f bin \
      -D"LOADER_OFFSET=$LOADER_OFF" \
      -D"LOAD_SECTOR=$SHELL_SECTOR" \
@@ -277,6 +280,39 @@ nasm -f bin \
      "$OUT_DIR/bootstub_shell.asm.tmp"
 rm -f "$OUT_DIR/bootstub_shell.asm.tmp"
 echo "Built: $OUT_DIR/bootstub_shell.bin ($(wc -c < "$OUT_DIR/bootstub_shell.bin") bytes)"
+
+# Demo transients added in Phase D — small period-flavored .COMs
+# that show off the typed-prompt loader path and the AH=06h
+# polling-input plumbing (SNAKE).
+nasm -f bin -o "$OUT_DIR/primes.bin" -l "$OUT_DIR/primes.lst" "$SCRIPT_DIR/primes.asm"
+echo "Built: $OUT_DIR/primes.bin ($(wc -c < "$OUT_DIR/primes.bin") bytes)"
+nasm -f bin -o "$OUT_DIR/matrix.bin" -l "$OUT_DIR/matrix.lst" "$SCRIPT_DIR/matrix.asm"
+echo "Built: $OUT_DIR/matrix.bin ($(wc -c < "$OUT_DIR/matrix.bin") bytes)"
+nasm -f bin -o "$OUT_DIR/snake.bin"  -l "$OUT_DIR/snake.lst"  "$SCRIPT_DIR/snake.asm"
+echo "Built: $OUT_DIR/snake.bin ($(wc -c < "$OUT_DIR/snake.bin") bytes)"
+
+# CHKDSK.COM — period-correct disk verifier translated from Tim
+# Paterson's CHKDSK_1981-07-15.ASM via scp_to_nasm.py (with R23/R24
+# rules added for CHKDSK's `MOV B,reg,...` and `LABEL: EQU N` shapes).
+# The translation goes through the same dialect translator the kernel
+# does so the original source under Paterson-Listings is never edited.
+CHKDSK_SRC=""
+if [ -f "$ROOT/Paterson-Listings/3_source_code/PC-DOS_1.00_dev/CHKDSK_1981-07-15.ASM" ]; then
+    CHKDSK_SRC="$ROOT/Paterson-Listings/3_source_code/PC-DOS_1.00_dev/CHKDSK_1981-07-15.ASM"
+elif [ -f "$ROOT/../Paterson-Listings/3_source_code/PC-DOS_1.00_dev/CHKDSK_1981-07-15.ASM" ]; then
+    CHKDSK_SRC="$ROOT/../Paterson-Listings/3_source_code/PC-DOS_1.00_dev/CHKDSK_1981-07-15.ASM"
+fi
+if [ -n "$CHKDSK_SRC" ]; then
+    "$PYTHON" "$SCRIPT_DIR/scp_to_nasm.py" "$CHKDSK_SRC" \
+        > "$OUT_DIR/chkdsk.translated.asm"
+    nasm -f bin \
+         -o "$OUT_DIR/chkdsk.bin" \
+         -l "$OUT_DIR/chkdsk.lst" \
+         "$OUT_DIR/chkdsk.translated.asm"
+    echo "Built: $OUT_DIR/chkdsk.bin ($(wc -c < "$OUT_DIR/chkdsk.bin") bytes) [from Paterson 1981-07-15]"
+else
+    echo "Skipping CHKDSK.COM: source not found in Paterson-Listings" >&2
+fi
 
 # Confidence harness — exercises BIOSOUT/BIOSIN/BIOSREAD with
 # deterministic output. Loaded at KERNEL_SEG:KERNEL_OFFSET so the

@@ -89,7 +89,7 @@ _RE_SHORTCUT = re.compile(
 )
 
 _RE_SEG = re.compile(
-    r'^\s*SEG\s+(?P<reg>ES|CS|SS|DS)\s*(?:;.*)?$',
+    r'^(?P<label>[A-Za-z_][A-Za-z0-9_]*:)?\s*SEG\s+(?P<reg>ES|CS|SS|DS)\s*(?:;.*)?$',
     re.IGNORECASE,
 )
 
@@ -252,6 +252,14 @@ _RE_CMP_MEM_IMM = re.compile(
     re.IGNORECASE,
 )
 
+# R24: `<LABEL>: EQU <value>` (SCP-ASM accepts a colon after the label
+# on EQU lines; NASM rejects it). Strip the colon. CHKDSK uses this
+# style for all its INT 21h call-number constants (OPEN, CLOSE, etc.).
+_RE_LABEL_EQU = re.compile(
+    r'^(?P<lead>\s*)(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*:\s*EQU\s+(?P<value>.+?)\s*(?P<comment>;.*)?$',
+    re.IGNORECASE,
+)
+
 # Registers that disambiguate operand size on their own.
 _BYTE_REGS = {'AL', 'BL', 'CL', 'DL', 'AH', 'BH', 'CH', 'DH'}
 _WORD_REGS = {'AX', 'BX', 'CX', 'DX', 'SI', 'DI', 'BP', 'SP',
@@ -319,10 +327,14 @@ def translate(lines):
                 out.append(_seg_prefix_db(pending_seg))
                 pending_seg = None
 
-        # R3b: detect SEG <reg> standalone.
+        # R3b: detect SEG <reg> (optionally preceded by a label like
+        # `WRT100: SEG CS` — CHKDSK has this form).
         m = _RE_SEG.match(line)
         if m:
             pending_seg = m.group('reg')
+            label = m.group('label')
+            if label:
+                out.append(f"{label}\n")
             out.append(f"\t; SCP: SEG {pending_seg.upper()} folded into next operand\n")
             continue
 
@@ -333,6 +345,13 @@ def translate(lines):
             continue
         if _RE_ENDIF.match(line):
             out.append("%endif\n")
+            continue
+
+        # R24: `LABEL: EQU <value>` -> `LABEL equ <value>`.
+        m = _RE_LABEL_EQU.match(line)
+        if m:
+            comment = m.group('comment') or ''
+            out.append(f"{m.group('lead')}{m.group('name')} equ {m.group('value')}{('  ' + comment) if comment else ''}\n")
             continue
 
         # R7: ORG handling — depends on whether we've hit PUT yet.
@@ -463,18 +482,28 @@ def translate(lines):
 
         # R14: `<op> B, ...` / `<op> W, ...` size hints. SCP placed
         # the size before the memory operand; NASM puts it inline.
-        # We only recognize this when the next operand starts with
-        # '['; otherwise the `B`/`W` was a register and not a hint.
+        # Two shapes to handle:
+        #   * rest starts with '[' — inject size inline (R14)
+        #   * rest starts with a register name — strip the size hint
+        #     entirely; the register already disambiguates (R23).
         m = _RE_SIZE_HINT.match(line)
-        if m and m.group('rest').lstrip().startswith('['):
-            op = m.group('op').lower()
-            size = 'byte' if m.group('size').upper() == 'B' else 'word'
+        if m:
             rest = m.group('rest')
+            stripped = rest.lstrip()
+            op = m.group('op').lower()
             comment = m.group('comment') or ''
-            # Inject size before the first '['.
-            rest_sized = rest.replace('[', f'{size} [', 1)
-            out.append(f"{m.group('lead')}{op} {rest_sized}{('  ' + comment) if comment else ''}\n")
-            continue
+            if stripped.startswith('['):
+                size = 'byte' if m.group('size').upper() == 'B' else 'word'
+                rest_sized = rest.replace('[', f'{size} [', 1)
+                out.append(f"{m.group('lead')}{op} {rest_sized}{('  ' + comment) if comment else ''}\n")
+                continue
+            # R23: first operand after the size hint is a register.
+            # CHKDSK example: `MOV B,DL,[CURDRV]` -> `mov dl, [curdrv]`.
+            first = stripped.split(',', 1)[0].strip().upper()
+            if first in _BYTE_REGS or first in _WORD_REGS:
+                out.append(f"{m.group('lead')}{op} {rest}{('  ' + comment) if comment else ''}\n")
+                continue
+            # Else fall through (some other unhandled shape).
 
         # R15: bare PUSH/POP [mem] needs `word` size in NASM.
         m = _RE_PUSH_POP_MEM.match(line)

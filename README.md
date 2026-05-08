@@ -17,21 +17,37 @@ It boots, prints the original banner, accepts the date prompt, and
 drops into a typed `A>` prompt where you can launch any of the
 ship-with .COM files (or any other you put on the disk image).
 
-| Program     | Bytes | What it does                                                         |
-|-------------|------:|----------------------------------------------------------------------|
-| `HELLO.COM` |   232 | Banner box                                                           |
-| `COUNT.COM` |    71 | Prints 1..50 in decimal (AAM / DIV demo)                             |
-| `MANDEL.COM`|   450 | Q4.12 fixed-point ASCII Mandelbrot, 78×24                            |
-| `JULIA.COM` |  1082 | 16-color animated Julia set, c walks a circle                        |
-| `LIFE.COM`  |  1058 | Conway's Game of Life, 200 generations, colored                      |
-| `SHELL.COM` |   990 | Typed-prompt command processor: `A>NAME`<Enter> → FCB OPEN + SEQRD   |
+| Program      | Bytes | What it does                                                         |
+|--------------|------:|----------------------------------------------------------------------|
+| `HELLO.COM`  |   232 | Banner box                                                           |
+| `COUNT.COM`  |    71 | Prints 1..50 in decimal (AAM / DIV demo)                             |
+| `MANDEL.COM` |   450 | Q4.12 fixed-point ASCII Mandelbrot, 78×24                            |
+| `JULIA.COM`  |  1082 | 16-color animated Julia set, c walks a circle                        |
+| `LIFE.COM`   |  1058 | Conway's Game of Life, 200 generations, colored                      |
+| `CHKDSK.COM` |  1723 | Disk + memory checker, **translated from Tim Paterson's 1981 source** (`Paterson-Listings/.../CHKDSK_1981-07-15.ASM`) via `scp_to_nasm.py` |
+| `PRIMES.COM` |   409 | Sieve of Eratosthenes through N=200, 10 primes per line              |
+| `MATRIX.COM` |   385 | ANSI "matrix rain" — 80×24, 100 frames, LFSR-driven glyphs           |
+| `SNAKE.COM`  |   818 | Playable 80×24 Snake. WASD to steer, Q to quit. Demonstrates that AH=06h DL=0xFF (RAWIO non-blocking input) works through the kernel during a running program |
+| `SHELL.COM`  |  2021 | Typed-prompt command processor: `A>NAME`<Enter> → FCB OPEN + SEQRD   |
 
-Built-in commands inside SHELL today: `EXIT` (clean halt). Anything
-else is treated as a program name — SHELL appends `.COM` if you didn't,
-walks the FCB OPEN/SEQRD path through the unmodified kernel, and JMPs
-into the loaded image. Phase B will add the rest of the DOS-1.0
-internals (`DIR`, `TYPE`, `DEL`, `REN`, `COPY`, `CLS`, `VER`,
-`DATE`, `TIME`).
+**Built-in commands inside SHELL** (parsed by SHELL itself, no `.COM`
+file involved):
+
+| Command      | Notes                                                  |
+|--------------|--------------------------------------------------------|
+| `DIR`        | List every file in the root directory (size in bytes)  |
+| `TYPE name`  | Dump a file to the console (stops at Ctrl-Z = 0x1A)    |
+| `DEL name` / `ERASE name` | Delete a file (alias)                     |
+| `REN old new`| Rename                                                 |
+| `COPY src dst` | Read src + write dst, 128-byte records               |
+| `CLS`        | ANSI clear screen + cursor home                        |
+| `VER`        | Print "espDos - 86-DOS Version 1.00"                   |
+| `DATE` / `TIME` | Print "Not supported in 86-DOS 1.00 (added in 1.10)" — the 1.0 dispatch table only goes up to function 41 (MAKEFCB); calls 2Ah-2Dh landed in DOS 1.10. We don't fake them, on principle |
+| `EXIT`       | Restore loader's IVT[20h], INT 20h, halt cleanly       |
+
+Anything else at the prompt is treated as a program name — SHELL
+appends `.COM` if you didn't, walks the FCB OPEN/SEQRD path through
+the unmodified kernel, and JMPs into the loaded image.
 
 Everything happens inside the unmodified 86-DOS kernel — `INT 21h`, the
 1981 DISPATCH table, the original FAT12 file ops. The shell is itself
@@ -194,8 +210,10 @@ idf.py build flash monitor
 
 The default boot is **SHELL.COM** — typed `A>` prompt over
 USB-Serial-JTAG. Type a program name + Enter to launch
-(`HELLO` / `COUNT` / `MANDEL` / `JULIA` / `LIFE`). After each child
-returns via `INT 20h`, SHELL re-prints `A>`. `EXIT` halts cleanly.
+(`HELLO` / `COUNT` / `MANDEL` / `JULIA` / `LIFE` / `CHKDSK` /
+`PRIMES` / `MATRIX` / `SNAKE`), or any of the built-in commands
+above. After each child returns via `INT 20h`, SHELL re-prints `A>`.
+`EXIT` halts cleanly.
 
 `Ctrl-]` exits the monitor; `Ctrl-T Ctrl-R` resets the board.
 

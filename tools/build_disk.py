@@ -61,6 +61,10 @@ FILES = [
     ("SHELL   ", "COM", "build/shell.bin"),
     ("JULIA   ", "COM", "build/julia.bin"),
     ("LIFE    ", "COM", "build/life.bin"),
+    ("CHKDSK  ", "COM", "build/chkdsk.bin"),
+    ("PRIMES  ", "COM", "build/primes.bin"),
+    ("MATRIX  ", "COM", "build/matrix.bin"),
+    ("SNAKE   ", "COM", "build/snake.bin"),
 ]
 
 
