@@ -186,13 +186,20 @@ static void bios_out_flush(void) {
 #endif
 
 static void bios_out(uint8_t ch) {
-    /* Write to JTAG non-blocking. With BIOS_TX_BUF=1024 the driver
-     * buffers a full row + headroom, and idf.py monitor drains the
-     * USB endpoint quickly enough that dropped chars are rare. We
-     * cannot block: in QEMU there's no USB host draining the TX
-     * buffer, so a blocking write would freeze the entire emulator
-     * the moment the driver buffer fills. */
-    usb_serial_jtag_write_bytes(&ch, 1, 0);
+    /* Write to JTAG. Non-blocking first; if the driver buffer is
+     * full and a host is actually draining it (idf.py monitor on
+     * hardware), wait briefly for room. matrix dumps ~600K bytes
+     * over its run — without a retry path, ~99% of those bytes get
+     * silently discarded the moment the 1 KB driver buffer fills,
+     * and the screen looks blank.
+     *
+     * Skip the retry when no host is connected (QEMU, or unplugged
+     * hardware) — there, the TX never drains so a blocking write
+     * would deadlock the emulator on the first frame. */
+    if (usb_serial_jtag_write_bytes(&ch, 1, 0) == 0
+        && usb_serial_jtag_is_connected()) {
+        usb_serial_jtag_write_bytes(&ch, 1, pdMS_TO_TICKS(20));
+    }
     /* Mirror to the LCD on targets that have one. The call is an
      * inline no-op when CONFIG_ESPDOS_HAS_DISPLAY=n. */
     display_putc(ch);
