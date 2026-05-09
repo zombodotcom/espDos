@@ -187,30 +187,14 @@ static void bios_out_flush(void) {
 #endif
 
 static void bios_out(uint8_t ch) {
-    /* Diagnostic: count calls + dropped writes so we can see whether
-     * matrix's "blank screen" is "BIOSOUT never fires" or "it fires
-     * but JTAG drops the bytes." Logs every 1000 calls; remove once
-     * matrix is confirmed visible end-to-end. */
-    static uint32_t out_calls;
-    static uint32_t out_drops;
-    static uint32_t out_first_drop_total;
-    out_calls++;
     /* Write to JTAG. usb_serial_jtag_is_connected() is unreliable on
      * the C5 — it can return false transiently even when idf.py
      * monitor is actively draining — so we don't gate the retry on
-     * it. Instead: try non-blocking, and on a full buffer wait up
-     * to 2 ms for room. */
-    int wrote = usb_serial_jtag_write_bytes(&ch, 1, 0);
-    if (wrote == 0) {
-        out_first_drop_total++;
-        wrote = usb_serial_jtag_write_bytes(&ch, 1, pdMS_TO_TICKS(2));
-        if (wrote == 0) out_drops++;
-    }
-    if ((out_calls % 1000) == 0) {
-        ESP_LOGW(TAG, "bios_out: %lu calls, %lu first-drops, %lu hard-drops",
-                 (unsigned long)out_calls,
-                 (unsigned long)out_first_drop_total,
-                 (unsigned long)out_drops);
+     * it. Try non-blocking; on a full buffer wait up to 2 ms for
+     * room. On hardware the host drains in microseconds so the
+     * retry essentially never sleeps. */
+    if (usb_serial_jtag_write_bytes(&ch, 1, 0) == 0) {
+        usb_serial_jtag_write_bytes(&ch, 1, pdMS_TO_TICKS(2));
     }
     /* Mirror to the LCD on targets that have one. The call is an
      * inline no-op when CONFIG_ESPDOS_HAS_DISPLAY=n. */
