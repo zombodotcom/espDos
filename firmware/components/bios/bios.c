@@ -25,11 +25,12 @@
  * which is why we see them, but for actual interactive I/O we must
  * read from the JTAG side or input never reaches the chip. */
 #define BIOS_RX_BUF    256
-/* TX buffer sized for one full JULIA row + headroom: 78 pixels x
- * 6 bytes (ESC[NNm + char) + row terminator (ESC[0m\r\n) = 475 bytes.
- * Round up to 1024 so PRTBUF never stalls mid-row waiting for the
- * driver to drain to USB. */
-#define BIOS_TX_BUF   1024
+/* TX buffer sized for matrix's per-frame burst: 80 cols x ~20 bytes
+ * (cursor + green + glyph + reset) = 1.6 KB per frame. With a 1 KB
+ * buffer, every frame overflows and writes silently dropped half its
+ * output — matrix looked completely blank on hardware. 4 KB swallows
+ * a full frame plus headroom; the host drains between frames. */
+#define BIOS_TX_BUF   4096
 
 static void disk_init(void);
 
@@ -186,19 +187,19 @@ static void bios_out_flush(void) {
 #endif
 
 static void bios_out(uint8_t ch) {
-    /* Write to JTAG. Non-blocking first; if the driver buffer is
-     * full and a host is actually draining it (idf.py monitor on
-     * hardware), wait briefly for room. matrix dumps ~600K bytes
-     * over its run — without a retry path, ~99% of those bytes get
-     * silently discarded the moment the 1 KB driver buffer fills,
-     * and the screen looks blank.
-     *
-     * Skip the retry when no host is connected (QEMU, or unplugged
-     * hardware) — there, the TX never drains so a blocking write
-     * would deadlock the emulator on the first frame. */
-    if (usb_serial_jtag_write_bytes(&ch, 1, 0) == 0
-        && usb_serial_jtag_is_connected()) {
-        usb_serial_jtag_write_bytes(&ch, 1, pdMS_TO_TICKS(20));
+    /* Write to JTAG. usb_serial_jtag_is_connected() is unreliable on
+     * the C5 — it can return false transiently even when idf.py
+     * monitor is actively draining — so we don't gate the retry on
+     * it. Instead: try non-blocking, and on a full buffer wait up
+     * to 2 ms for room. On hardware the host drains in microseconds
+     * so the retry essentially never sleeps; in QEMU there's no
+     * host, so 2 ms × 600 K matrix bytes ≈ 20 minutes of frozen
+     * emulator if matrix is launched there. The QEMU loop is
+     * S3-only today (the C5 RISC-V port has no QEMU), so this
+     * trade-off is acceptable for now; switch to is_connected-gating
+     * once that returns reliably. */
+    if (usb_serial_jtag_write_bytes(&ch, 1, 0) == 0) {
+        usb_serial_jtag_write_bytes(&ch, 1, pdMS_TO_TICKS(2));
     }
     /* Mirror to the LCD on targets that have one. The call is an
      * inline no-op when CONFIG_ESPDOS_HAS_DISPLAY=n. */
