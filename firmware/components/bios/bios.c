@@ -12,7 +12,9 @@
 
 #include "esp_log.h"
 #include "esp_partition.h"
+#include "esp_rom_sys.h"           /* esp_rom_delay_us */
 #include "driver/usb_serial_jtag.h"
+#include "hal/usb_serial_jtag_ll.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -187,13 +189,24 @@ static void bios_out_flush(void) {
 #endif
 
 static void bios_out(uint8_t ch) {
-    /* Write straight to fd 2 (stderr). Bypasses stdio buffering
-     * entirely — fputc(stderr) with setvbuf(_IONBF) wasn't taking
-     * effect, so "A>" sat in the FILE buffer until the next \n
-     * triggered a line flush. write() goes direct to the VFS,
-     * which is the path ESP_LOG ultimately reaches; bytes push
-     * synchronously per call. */
-    write(STDERR_FILENO, &ch, 1);
+    /* Write directly to the USB-Serial-JTAG hardware FIFO and trip
+     * the wr_done bit so the host actually picks it up. Bypasses
+     * the driver task, the VFS, and stdio — every previous attempt
+     * (write_bytes, fputc(stderr), write(STDERR_FILENO,…)) was
+     * buffering somewhere and "A>" stayed invisible until something
+     * downstream eventually flushed.
+     *
+     * The wait_us bound is a safety valve for a disconnected host:
+     * if nobody's draining, the FIFO never frees a slot and we'd
+     * spin forever. ~5 ms is forever in CPU time but barely a hiccup
+     * to a human eye, so we just drop the byte after that. */
+    int spins = 0;
+    while (!usb_serial_jtag_ll_txfifo_writable()) {
+        if (++spins > 50) return;
+        esp_rom_delay_us(100);
+    }
+    usb_serial_jtag_ll_write_txfifo(&ch, 1);
+    usb_serial_jtag_ll_txfifo_flush();
     /* Mirror to the LCD on targets that have one. The call is an
      * inline no-op when CONFIG_ESPDOS_HAS_DISPLAY=n. */
     display_putc(ch);
