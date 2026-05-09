@@ -188,13 +188,28 @@ static void bios_out_flush(void) {
 
 static void bios_out(uint8_t ch) {
     /* Write to JTAG. usb_serial_jtag_is_connected() is unreliable on
-     * the C5 — it can return false transiently even when idf.py
-     * monitor is actively draining — so we don't gate the retry on
-     * it. Try non-blocking; on a full buffer wait up to 2 ms for
-     * room. On hardware the host drains in microseconds so the
-     * retry essentially never sleeps. */
+     * the C5, so we always retry on a full first attempt. */
     if (usb_serial_jtag_write_bytes(&ch, 1, 0) == 0) {
         usb_serial_jtag_write_bytes(&ch, 1, pdMS_TO_TICKS(2));
+    }
+    /* Force the driver task to actually push to the host every N
+     * bytes. Without this, the driver buffers indefinitely while
+     * the emulator hogs CPU — matrix produces ~600 KB of output but
+     * the user sees nothing for ~10 s, then the whole rendering
+     * appears at once when matrix exits and the kernel finally
+     * yields. ESP_LOGI didn't have this symptom because each log
+     * line goes through the blocking VFS-to-JTAG path which waits
+     * for the TX FIFO to drain — that's why my earlier diagnostic
+     * counter accidentally fixed the visual bug.
+     *
+     * 64 bytes ≈ one USB CDC packet, so we yield once per packet.
+     * On hardware the wait is microseconds; the cost is invisible.
+     * In QEMU there's no host so wait_tx_done with a 0-ms cap
+     * returns immediately without sleeping. */
+    static unsigned since_flush;
+    if (++since_flush >= 64) {
+        since_flush = 0;
+        usb_serial_jtag_wait_tx_done(0);
     }
     /* Mirror to the LCD on targets that have one. The call is an
      * inline no-op when CONFIG_ESPDOS_HAS_DISPLAY=n. */
