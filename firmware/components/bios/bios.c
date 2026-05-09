@@ -42,12 +42,6 @@ void bios_init(void) {
         .tx_buffer_size = BIOS_TX_BUF,
     };
     usb_serial_jtag_driver_install(&cfg);
-    /* Disable stdio's line/block buffering on stderr so per-byte
-     * fputc() in bios_out actually pushes per byte. Without this,
-     * stderr is line-buffered when its fd is a TTY (default for
-     * USB-Serial-JTAG) and matrix's no-newline output sits in the
-     * FILE buffer until the buffer fills (~4 KB) or matrix exits. */
-    setvbuf(stderr, NULL, _IONBF, 0);
     disk_init();
     installed = 1;
 }
@@ -193,15 +187,13 @@ static void bios_out_flush(void) {
 #endif
 
 static void bios_out(uint8_t ch) {
-    /* Write through stderr's fd (set unbuffered in bios_init below).
-     * That's the path ESP_LOG eventually drops bytes onto — through
-     * the USB-Serial-JTAG VFS, which writes synchronously and waits
-     * for FIFO room. usb_serial_jtag_write_bytes() with timeout=0
-     * only queues into the driver buffer non-blocking; bytes piled
-     * up until the emulator yielded, hence the "blank screen for 10 s
-     * then dump" symptom. fputc(stderr) with stdio buffering
-     * disabled gives us per-byte synchronous push. */
-    fputc(ch, stderr);
+    /* Write straight to fd 2 (stderr). Bypasses stdio buffering
+     * entirely — fputc(stderr) with setvbuf(_IONBF) wasn't taking
+     * effect, so "A>" sat in the FILE buffer until the next \n
+     * triggered a line flush. write() goes direct to the VFS,
+     * which is the path ESP_LOG ultimately reaches; bytes push
+     * synchronously per call. */
+    write(STDERR_FILENO, &ch, 1);
     /* Mirror to the LCD on targets that have one. The call is an
      * inline no-op when CONFIG_ESPDOS_HAS_DISPLAY=n. */
     display_putc(ch);
