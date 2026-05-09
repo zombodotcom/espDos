@@ -24,11 +24,11 @@ ship-with .COM files (or any other you put on the disk image).
 | `MANDEL.COM` |   450 | Q4.12 fixed-point ASCII Mandelbrot, 78×24                            |
 | `JULIA.COM`  |  1082 | 16-color animated Julia set, c walks a circle                        |
 | `LIFE.COM`   |  1058 | Conway's Game of Life, 200 generations, colored                      |
-| `CHKDSK.COM` |  1723 | Disk + memory checker, **translated from Tim Paterson's 1981 source** (`Paterson-Listings/.../CHKDSK_1981-07-15.ASM`) via `scp_to_nasm.py` |
+| `CHKDSK.COM` |  1725 | Disk + memory checker, **translated from Tim Paterson's 1981 source** (`Paterson-Listings/.../CHKDSK_1981-07-15.ASM`) via `scp_to_nasm.py` |
 | `PRIMES.COM` |   409 | Sieve of Eratosthenes through N=200, 10 primes per line              |
 | `MATRIX.COM` |   385 | ANSI "matrix rain" — 80×24, 100 frames, LFSR-driven glyphs           |
-| `SNAKE.COM`  |   818 | Playable 80×24 Snake. WASD to steer, Q to quit. Demonstrates that AH=06h DL=0xFF (RAWIO non-blocking input) works through the kernel during a running program |
-| `SHELL.COM`  |  2021 | Typed-prompt command processor: `A>NAME`<Enter> → FCB OPEN + SEQRD   |
+| `SNAKE.COM`  |   833 | Playable 80×24 Snake. WASD to steer, Q to quit. All output uses AH=06h RAWOUT to bypass the kernel's STATCHK→INCHK snoop layer — otherwise it eats the very keystrokes `poll_key` is waiting for |
+| `SHELL.COM`  |  2070 | Typed-prompt command processor: `A>NAME`<Enter> resolves the file via SRCHFRST and direct-BIOSREADs its contiguous-cluster sector run into CHILD_SEG (sidesteps the kernel's SEQRD divide-by-SECSIZ trap) |
 
 **Built-in commands inside SHELL** (parsed by SHELL itself, no `.COM`
 file involved):
@@ -46,8 +46,14 @@ file involved):
 | `EXIT`       | Restore loader's IVT[20h], INT 20h, halt cleanly       |
 
 Anything else at the prompt is treated as a program name — SHELL
-appends `.COM` if you didn't, walks the FCB OPEN/SEQRD path through
-the unmodified kernel, and JMPs into the loaded image.
+appends `.COM` if you didn't, finds the file via INT 21h SRCHFRST
+(reading cluster + size out of the returned directory entry), then
+BIOSREADs the contiguous sector run straight into CHILD_SEG:0x100
+and JMPs into it. We bypass INT 21h SEQRD because the kernel's LOAD
+path divides by `[BP+SECSIZ]` and our minimal-init DPB leaves SECSIZ
+at zero — the divide traps to an unpopulated IVT[0] and halts the
+emulator at CS:IP=0:0. Same workaround the bootstub-side `loader.asm`
+already uses to load the boot transient.
 
 Everything happens inside the unmodified 86-DOS kernel — `INT 21h`, the
 1981 DISPATCH table, the original FAT12 file ops. The shell is itself
@@ -312,7 +318,7 @@ fractal optimization are in `docs/mandelbrot-performance.md`.
 cd tests/emu && mingw32-make run
 ```
 
-13 host tests, each running the same `esp8086.c` the firmware uses,
+16 host tests, each running the same `esp8086.c` the firmware uses,
 exercising it from a small C harness with stub BIOS handlers:
 
 - `test_jmp_near` / `test_kernel_first_step` — opcode decoder + register file
@@ -322,6 +328,7 @@ exercising it from a small C harness with stub BIOS handlers:
 - `test_hello`         — "Hello, World!" appears end-to-end
 - `test_mandel` / `test_julia` — Mandelbrot + Julia render correctly
 - `test_fininit_stack` — stack layout at FININIT exit (drove the loader design)
+- `test_shell_mandel` / `test_shell_matrix` / `test_shell_snake` — boot SHELL via the same loader the firmware uses, type a date + program name, and verify the launched transient produces real output. Catches the kind of bug that passes manual smoke testing on hardware but quietly breaks every launch (saving SP through the wrong segment, NASM 3.x silently emitting 286+ Jcc encodings 8086tiny can't decode, etc.)
 - `test_display_ansi_strip` — ANSI escape stripper state machine
 - `test_display_ring_buffer` — 9-row scrolling log rotation
 - `test_subpixel_glyph_table` — Spleen 6×8 → BGR subpixel table cross-check

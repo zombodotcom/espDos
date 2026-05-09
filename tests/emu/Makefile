@@ -23,7 +23,8 @@ CFLAGS := -std=c99 -Wall \
 TESTS := test_jmp_near.exe test_kernel_first_step.exe test_bootstub.exe \
         test_hello.exe test_kernel_banner.exe test_memory_bounds.exe \
         test_fininit_stack.exe test_loader.exe test_mandel.exe \
-        test_julia.exe \
+        test_julia.exe test_shell_mandel.exe test_shell_matrix.exe \
+        test_shell_snake.exe \
         test_display_ansi_strip.exe test_display_ring_buffer.exe \
         test_subpixel_glyph_table.exe
 
@@ -59,6 +60,15 @@ test_mandel.exe: test_mandel.c $(EMU_SRC) test_helpers.c
 test_julia.exe: test_julia.c $(EMU_SRC) test_helpers.c
 	gcc $(CFLAGS) $^ -o $@
 
+test_shell_mandel.exe: test_shell_mandel.c $(EMU_SRC) test_helpers.c
+	gcc $(CFLAGS) $^ -o $@
+
+test_shell_matrix.exe: test_shell_matrix.c $(EMU_SRC) test_helpers.c
+	gcc $(CFLAGS) $^ -o $@
+
+test_shell_snake.exe: test_shell_snake.c $(EMU_SRC) test_helpers.c
+	gcc $(CFLAGS) $^ -o $@
+
 test_display_ansi_strip.exe: test_display_ansi_strip.c $(DISPLAY_LOG)
 	gcc $(CFLAGS) $(DISPLAY_INC) $^ -o $@
 
@@ -89,6 +99,12 @@ run: all
 	@./test_mandel.exe ; echo "exit=$$?"
 	@echo === test_julia ===
 	@./test_julia.exe ; echo "exit=$$?"
+	@echo === test_shell_mandel ===
+	@./test_shell_mandel.exe ; echo "exit=$$?"
+	@echo === test_shell_matrix ===
+	@./test_shell_matrix.exe ; echo "exit=$$?"
+	@echo === test_shell_snake ===
+	@./test_shell_snake.exe ; echo "exit=$$?"
 	@echo === test_display_ansi_strip ===
 	@./test_display_ansi_strip.exe ; echo "exit=$$?"
 	@echo === test_display_ring_buffer ===

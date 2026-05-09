@@ -182,8 +182,18 @@ nasm -f bin \
      "$SCRIPT_DIR/julia.asm"
 echo "Built: $OUT_DIR/julia.bin ($(wc -c < "$OUT_DIR/julia.bin") bytes)"
 
-JULIA_SECTOR=18
-JULIA_COUNT=3
+# JULIA's cluster = HELLO(1) + MANDEL(1) + COUNT(1) + SHELL(N).
+# SHELL has grown past 4 sectors, so JULIA's hardcoded sector
+# (18, valid when SHELL was 4 sectors) drifts every time SHELL
+# crosses a 512-byte boundary. Peek-build shell.asm here to get
+# its sector count; the real shell.bin is assembled later. This
+# keeps per-transient loaders matched to build_disk.py's actual
+# cluster assignments without restructuring the whole script.
+nasm -f bin -o "$OUT_DIR/shell.peek.bin" "$SCRIPT_DIR/shell.asm"
+SHELL_PEEK_SECTORS=$(( ($(wc -c < "$OUT_DIR/shell.peek.bin") + 511) / 512 ))
+rm -f "$OUT_DIR/shell.peek.bin"
+JULIA_SECTOR=$(( 14 + SHELL_PEEK_SECTORS ))
+JULIA_COUNT=$(( ($(wc -c < "$OUT_DIR/julia.bin") + 511) / 512 ))
 nasm -f bin \
      -D"LOADER_OFFSET=$LOADER_OFF" \
      -D"LOAD_SECTOR=$JULIA_SECTOR" \
@@ -217,8 +227,9 @@ nasm -f bin \
      "$SCRIPT_DIR/life.asm"
 echo "Built: $OUT_DIR/life.bin ($(wc -c < "$OUT_DIR/life.bin") bytes)"
 
-LIFE_SECTOR=21
-LIFE_COUNT=2
+# LIFE follows JULIA. Same drift fix.
+LIFE_SECTOR=$(( JULIA_SECTOR + JULIA_COUNT ))
+LIFE_COUNT=$(( ($(wc -c < "$OUT_DIR/life.bin") + 511) / 512 ))
 nasm -f bin \
      -D"LOADER_OFFSET=$LOADER_OFF" \
      -D"LOAD_SECTOR=$LIFE_SECTOR" \
@@ -253,11 +264,11 @@ nasm -f bin \
 echo "Built: $OUT_DIR/shell.bin ($(wc -c < "$OUT_DIR/shell.bin") bytes)"
 
 SHELL_SECTOR=14
-SHELL_COUNT=4                         # SHELL grows through Phase B/C/D
-                                      # built-ins; reserve 4 sectors
-                                      # (~2KB cap) so we don't have to
-                                      # slide JULIA/LIFE again every
-                                      # time it crosses 512.
+# Derive count from the built shell.bin so SHELL can keep growing
+# without anyone remembering to bump this. Hardcoded counts have
+# silently truncated SHELL twice already.
+SHELL_BYTES=$(wc -c < "$OUT_DIR/shell.bin")
+SHELL_COUNT=$(( (SHELL_BYTES + 511) / 512 ))
 nasm -f bin \
      -D"LOADER_OFFSET=$LOADER_OFF" \
      -D"LOAD_SECTOR=$SHELL_SECTOR" \

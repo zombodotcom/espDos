@@ -109,19 +109,22 @@ static const char  bios_autodate[] = "1-1-80\r";
 static unsigned    bios_autodate_pos;
 #endif
 
+/* One-byte peek buffer shared between bios_stat (which fills it on a
+ * 0-tick non-blocking read) and bios_in (which consumes it before
+ * blocking). Without the consumer half, snake's WASD never reaches
+ * snake.asm: bios_stat sees a key, sets peek_valid forever, and
+ * every bios_in blocks on JTAG instead of returning the peeked byte. */
+static uint8_t peek_byte;
+static int     peek_valid = 0;
+
 static uint8_t bios_stat(void) {
     /* DO NOT report ready when only auto-feed bytes remain. The
      * kernel's OUT routine does an "input snoop" on every CONOUT —
      * if STAT says "ready", it consumes one char from BIOSIN looking
      * for Ctrl-C/S/P/N. Returning 0xFF here would let the menu print
-     * eat the AUTOPICK digit before SHELL.COM's AH=01 ever runs.
-     *
-     * Try a 0-tick read; if it returns 1, push back into our 1-byte
-     * peek buffer so the next bios_in() picks it up. */
-    static uint8_t peek;
-    static int peek_valid = 0;
+     * eat the AUTOPICK digit before SHELL.COM's AH=01 ever runs. */
     if (peek_valid) return 0xFF;
-    int n = usb_serial_jtag_read_bytes(&peek, 1, 0);
+    int n = usb_serial_jtag_read_bytes(&peek_byte, 1, 0);
     if (n == 1) { peek_valid = 1; return 0xFF; }
     return 0;
 }
@@ -132,6 +135,14 @@ static uint8_t bios_in(void) {
         return (uint8_t)bios_autodate[bios_autodate_pos++];
     }
 #endif
+    /* Drain the peek buffer first so STAT-reported keys actually
+     * reach the caller. Without this, bios_stat fills peek and never
+     * resets the valid flag, and bios_in goes straight to JTAG —
+     * the peeked byte is silently dropped on every poll. */
+    if (peek_valid) {
+        peek_valid = 0;
+        return peek_byte;
+    }
     extern int  usb_serial_jtag_read_bytes(void *, uint32_t, TickType_t);
     /* Cooperative blocking: 100ms read with retry. JTAG driver yields
      * during the wait, so the watchdog stays satisfied. */

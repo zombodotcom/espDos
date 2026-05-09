@@ -8,6 +8,7 @@
 ; Roughly 80 bytes, well under one sector.
 
 bits 16
+cpu 8086                   ; reject 286+ encodings (8086tiny only)
 org 0x100
 
 start:

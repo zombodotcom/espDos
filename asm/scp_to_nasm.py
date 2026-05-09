@@ -252,6 +252,14 @@ _RE_CMP_MEM_IMM = re.compile(
     re.IGNORECASE,
 )
 
+# R23: `TEST [mem], imm` with non-register source → add `word`. NASM
+# 3.x rejects the unsized form ("operation size not specified").
+# Used by CHKDSK's `TEST [BP],-1` cluster-bitmap check.
+_RE_TEST_MEM_IMM = re.compile(
+    r'^(?P<lead>\s*)TEST\s+(?P<mem>\[[^]]+\])\s*,\s*(?P<src>[^;]+?)\s*(?P<comment>;.*)?$',
+    re.IGNORECASE,
+)
+
 # R24: `<LABEL>: EQU <value>` (SCP-ASM accepts a colon after the label
 # on EQU lines; NASM rejects it). Strip the colon. CHKDSK uses this
 # style for all its INT 21h call-number constants (OPEN, CLOSE, etc.).
@@ -298,6 +306,13 @@ def _rename_identifiers(line):
 
 def translate(lines):
     out = []
+    # Emit cpu 8086 so NASM 3.x rejects 286+ encodings. R13b expands
+    # most long Jccs, but anything it misses (e.g., `LABEL:JAE TARGET`
+    # — label and instruction on the same line skip the line-anchored
+    # R13b regex) would otherwise become `0F 8x rel16`, which 8086tiny
+    # decodes as POP CS + garbage. With cpu 8086 set, NASM auto-expands
+    # the missed cases to `Jncc +3; JMP rel16` instead.
+    out.append("cpu 8086\n")
     pending_seg = None
     in_code = False  # flips True after the first PUT directive
     jcc_ret_counter = 0
@@ -607,6 +622,18 @@ def translate(lines):
                 mem = m.group('mem')
                 comment = m.group('comment') or ''
                 out.append(f"{m.group('lead')}cmp word {mem}, {src}{('  ' + comment) if comment else ''}\n")
+                continue
+            # Else fall through.
+
+        # R23: `TEST [mem], imm` with non-register source → add word.
+        m = _RE_TEST_MEM_IMM.match(line)
+        if m:
+            src = m.group('src').strip()
+            src_upper = src.upper()
+            if src_upper not in _BYTE_REGS and src_upper not in _WORD_REGS:
+                mem = m.group('mem')
+                comment = m.group('comment') or ''
+                out.append(f"{m.group('lead')}test word {mem}, {src}{('  ' + comment) if comment else ''}\n")
                 continue
             # Else fall through.
 

@@ -19,6 +19,7 @@
 ; any 86-DOS failures are kernel-side issues, not plumbing.
 
 bits 16
+cpu 8086                   ; reject 286+ encodings (8086tiny only)
 org 0x100                  ; matches PUT 100H in 86DOS.ASM
 
 BIOSSEG    equ 0x0040
@@ -97,11 +98,14 @@ crlf:
 
 hex_byte:                  ; print AL as 2 uppercase hex chars
     push ax
+    push cx
     mov  ah, al
-    shr  al, 4
+    mov  cl, 4
+    shr  al, cl              ; 8086 only takes shr r/m,1 or shr r/m,cl
     call hex_nib
     mov  al, ah
     call hex_nib
+    pop  cx
     pop  ax
     ret
 

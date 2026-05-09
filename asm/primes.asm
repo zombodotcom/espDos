@@ -9,6 +9,7 @@
 ; load by the file image, then again at runtime for safety).
 
 bits 16
+cpu 8086                         ; reject 286+ encodings (8086tiny only)
 org 0x100
 
 N           equ 200             ; upper bound (inclusive) for primes

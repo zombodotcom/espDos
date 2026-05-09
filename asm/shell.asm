@@ -24,6 +24,9 @@
 ; layers, so AUTOPICK auto-feed bytes are never silently eaten.
 
 bits 16
+cpu 8086                            ; refuse 286+ encodings — 8086tiny
+                                    ; sees `0F 8x` as POP CS + junk and
+                                    ; wanders into uninitialized memory
 org 0x100
 
 CHILD_SEG       equ 0x3000
@@ -99,10 +102,12 @@ prompt:
 on_child_exit:
     ; Re-entry from the child's INT 20h. CPU pushed flags+CS+IP onto
     ; the *child's* stack (SS=CHILD_SEG). Switch our stack back first.
+    ; DS is still the child's segment here, so shell_sp_save must be
+    ; read with a CS-override before we restore DS=CS=USER_SEG.
     cli
     mov  ax, cs
     mov  ss, ax
-    mov  sp, [shell_sp_save]
+    mov  sp, [cs:shell_sp_save]
     mov  ds, ax
     mov  es, ax
     sti
@@ -509,18 +514,28 @@ dispatch:
 ; space/NUL/CR/comma).
 ;
 ; Pipeline:
-;   1. name_to_fcb -> fcb_buf (default extension defaults to .COM if
-;      the user typed just a bare name like "HELLO").
-;   2. INT 21h call 0Fh (OPEN). Failure -> ret CF=1.
-;   3. Install on_child_exit as IVT[20h] so the child's INT 20h
+;   1. name_to_fcb -> fcb_buf (default extension to .COM).
+;   2. SETDMA + SRCHFRST so the kernel writes the matching directory
+;      entry into dir_buf. AL != 0 -> file not found -> CF=1.
+;   3. Read starting cluster (dir_buf+27) and size low word
+;      (dir_buf+29) from the FCB-format directory entry. Translate
+;      cluster N -> sector N+9 (build_disk.py allocates each file as
+;      a run of contiguous clusters in the data area starting at
+;      sector 11), and size -> sector count = (size+511)/512.
+;   4. Install on_child_exit as IVT[20h] so the child's INT 20h
 ;      re-enters the shell loop after the child finishes.
-;   4. SETDMA + SEQRD loop, stepping the DTA 128 bytes per record so
-;      the .COM image accumulates contiguously at CHILD_SEG:0x100.
-;   5. Set DS=ES=SS=CHILD_SEG, SP=0xFFFE, JMP CHILD_SEG:0x100.
+;   5. BIOSREAD the sector run directly into CHILD_SEG:0x100 via
+;      far-call to BIOSSEG:0x0015. We bypass INT 21h SEQRD because
+;      the kernel's LOAD path divides by [BP+SECSIZ] and the DPB it
+;      computes for drive 0 in our minimal init has SECSIZ=0; the
+;      divide traps to IVT[0] which is unpopulated, halting the
+;      emulator at CS:IP=0:0. Same workaround loader.asm uses.
+;   6. Set DS=ES=SS=CHILD_SEG, SP=0xFFFE, JMP CHILD_SEG:0x100.
 ;
-; CF=1 return = invalid name / OPEN failed / segment overflow.
-; A successful launch never returns from here directly; on_child_exit
-; lands back in shell_loop after the child's INT 20h.
+; CF=1 return = invalid name / file not found / zero-byte file /
+;               BIOSREAD failure (with IVT[20h] restored).
+; A successful launch never returns from here directly;
+; on_child_exit lands back in shell_loop after the child's INT 20h.
 external_load:
     push si
     mov  di, fcb_buf
@@ -537,14 +552,37 @@ external_load:
     mov  byte [di + 2], 'M'
 .ext_set:
 
-    ; OPEN the file. AL=0 success, anything else = failure.
+    ; SETDMA(DS:DX = dir_buf). DS = USER_SEG already.
+    mov  dx, dir_buf
+    mov  ah, 0x1A
+    int  0x21
+
+    ; SRCHFRST with the exact filename — kernel writes the directory
+    ; entry into dir_buf. AL=0 success, AL=0xFF not found.
     mov  dx, fcb_buf
-    mov  ah, 0x0F
+    mov  ah, 0x11
     int  0x21
     test al, al
     jnz  .fail
 
-    ; OPEN succeeded. Save SP for re-entry and arm on_child_exit.
+    ; cluster + 9 = data sector (cluster 2 -> sector 11).
+    mov  ax, [dir_buf + 27]
+    add  ax, 9
+    mov  word [load_sector], ax
+
+    ; (size + 511) / 512 = sector count. 16-bit math is enough; our
+    ; largest transient is ~2 KB and FAT12 caps the disk at 16 MB
+    ; anyway. Zero-byte files have no sectors and are rejected.
+    mov  ax, [dir_buf + 29]
+    test ax, ax
+    jz   .fail
+    add  ax, 511
+    mov  cl, 9
+    shr  ax, cl
+    mov  word [load_count], ax
+
+    ; Save SP and arm on_child_exit before BIOSREAD. If BIOSREAD
+    ; fails we restore IVT[20h] in .fail_postivt below.
     mov  [shell_sp_save], sp
     cli
     xor  ax, ax
@@ -553,37 +591,20 @@ external_load:
     mov  ax, cs
     mov  word [es:INT20_VEC + 2], ax
     sti
-    push cs
-    pop  es                      ; restore ES = CS for fcb_buf access
 
-    ; Stream records via a moving DTA. The kernel's SEQRD writes one
-    ; 128-byte record per call to the DMA address set by SETDMA, but
-    ; doesn't auto-advance it — so we step the DTA forward by 128
-    ; ourselves between calls. AL return: 0=full record, 1=partial
-    ; last record (EOF), 2=segment wrap (fail), 3=EOF (no data).
-    mov  word [dma_offset], 0x100
-.read_loop:
+    ; BIOSREAD: AL=drive, DS:BX=destination buffer, CX=sector count,
+    ; DX=starting sector. The far call's CS = BIOSSEG triggers the
+    ; emulator's per-step BIOS-call trap; bios.c services it and
+    ; RETF's back here.
+    mov  cx, [load_count]        ; while DS = USER_SEG
+    mov  dx, [load_sector]
     mov  ax, CHILD_SEG
-    push ds
     mov  ds, ax
-    mov  dx, [cs:dma_offset]
-    mov  ah, 0x1A
-    int  0x21
-    pop  ds
+    mov  bx, 0x100
+    mov  al, 0                   ; drive A (AH ignored by BIOSREAD)
+    call 0x0040:0x0015
+    jc   .fail_postivt
 
-    mov  dx, fcb_buf
-    mov  ah, 0x14
-    int  0x21
-    cmp  al, 1
-    je   .read_done
-    cmp  al, 3
-    je   .read_done
-    test al, al
-    jnz  .fail                   ; AL=2 segment overflow
-    add  word [dma_offset], 128
-    jmp  .read_loop
-
-.read_done:
     ; Stand up the child like a fresh transient and JMP.
     mov  ax, CHILD_SEG
     mov  ds, ax
@@ -591,6 +612,24 @@ external_load:
     mov  ss, ax
     mov  sp, 0xFFFE
     jmp  word CHILD_SEG:0x100
+
+.fail_postivt:
+    ; BIOSREAD failed. Restore loader's IVT[20h] = halt before
+    ; reporting failure so a subsequent EXIT halts cleanly.
+    cli
+    xor  ax, ax
+    mov  es, ax
+    push cs
+    pop  ds
+    mov  ax, [prev_int20_off]
+    mov  word [es:INT20_VEC], ax
+    mov  ax, [prev_int20_seg]
+    mov  word [es:INT20_VEC + 2], ax
+    sti
+    push cs
+    pop  es
+    stc
+    ret
 
 .fail:
     stc
@@ -665,9 +704,23 @@ do_dir:
     jnz  .none
 
 .list_loop:
-    ; Print 8-char name from dir_buf[0..7].
+    ; 86-DOS 1.0 SRCHFRST/SRCHNXT writes an FCB-format record to the
+    ; DTA, not the raw on-disk FAT12 entry. Layout we observe:
+    ;   byte 0      drive (0 = A)
+    ;   bytes 1..8  name (space-padded, uppercase)
+    ;   bytes 9..11 ext  (space-padded, uppercase)
+    ;   bytes 29..30 file size, low 16 bits (our files are < 64KB)
+    ; Filter empty (0x00 -> end of dir) and deleted (0xE5) slots —
+    ; the kernel's '?' wildcard matches everything including those.
+    mov  al, [dir_buf + 1]
+    test al, al
+    jz   .end
+    cmp  al, 0xE5
+    je   .next
+
+    ; Print 8-char name from dir_buf[1..8].
     mov  cx, 8
-    mov  si, dir_buf
+    mov  si, dir_buf + 1
 .name_out:
     mov  dl, [si]
     inc  si
@@ -679,9 +732,9 @@ do_dir:
     mov  ah, 0x06
     int  0x21
 
-    ; Print 3-char ext from dir_buf[8..10].
+    ; Print 3-char ext from dir_buf[9..11].
     mov  cx, 3
-    mov  si, dir_buf + 8
+    mov  si, dir_buf + 9
 .ext_out:
     mov  dl, [si]
     inc  si
@@ -697,8 +750,8 @@ do_dir:
     mov  ah, 0x06
     int  0x21
 
-    ; Size from dir_buf[28..29] (low 16 bits — our files are < 64KB).
-    mov  ax, [dir_buf + 28]
+    ; Size low word at dir_buf[29..30].
+    mov  ax, [dir_buf + 29]
     call print_dec
 
     ; CRLF.
@@ -709,6 +762,7 @@ do_dir:
     mov  ah, 0x06
     int  0x21
 
+.next:
     ; SRCHNXT.
     mov  dx, fcb_buf
     mov  ah, 0x12
@@ -716,6 +770,7 @@ do_dir:
     test al, al
     jz   .list_loop
 
+.end:
     pop  di
     pop  si
     ret
@@ -1072,7 +1127,8 @@ dec_buf:
 prev_int20_off:    dw 0
 prev_int20_seg:    dw 0
 shell_sp_save:     dw 0
-dma_offset:        dw 0          ; running DTA for SEQRD-into-CHILD_SEG
+load_sector:       dw 0          ; first data sector for the .COM file
+load_count:        dw 0          ; number of contiguous sectors to read
 
 ; FCB working buffer for OPEN/SEQRD/etc. 64 bytes covers the standard
 ; layout (drive(1) + name(8) + ext(3) + reserved(20) + current_record(1))

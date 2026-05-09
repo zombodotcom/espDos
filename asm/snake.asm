@@ -17,6 +17,7 @@
 ; resets the food without lengthening.
 
 bits 16
+cpu 8086                         ; reject 286+ encodings (8086tiny only)
 org 0x100
 
 NUM_COLS    equ 80
@@ -33,9 +34,8 @@ start:
     pop  es
 
     ; Clear screen, hide cursor, draw border row of '+' along edges.
-    mov  ah, 0x09
     mov  dx, init_seq
-    int  0x21
+    call print_str
 
     ; Place initial snake horizontally at row 12, head at col 44,
     ; tail at col 40 (so direction = right means heading off into open
@@ -70,9 +70,8 @@ start:
     mov  ah, [body + si + 0]
     mov  al, [body + si + 1]
     call cursor_to
-    mov  ah, 0x09
     mov  dx, snake_glyph
-    int  0x21
+    call print_str
     pop  bx
     inc  bx
     jmp  .draw_init
@@ -198,7 +197,7 @@ start:
     mov  ah, [body + bx + 0]
     mov  al, [body + bx + 1]
     call cursor_to
-    mov  ah, 0x02
+    mov  ah, 0x06
     mov  dl, ' '
     int  0x21
     pop  ax
@@ -209,20 +208,17 @@ start:
 .draw_head:
     ; Render the new head.
     call cursor_to
-    mov  ah, 0x09
     mov  dx, snake_glyph
-    int  0x21
+    call print_str
 
     jmp  .frame_loop
 
 .gameover:
-    mov  ah, 0x09
     mov  dx, gameover_seq
-    int  0x21
+    call print_str
 .quit:
-    mov  ah, 0x09
     mov  dx, exit_seq
-    int  0x21
+    call print_str
     int  0x20
 
 ; -------------------------------------------------------------------
@@ -280,9 +276,8 @@ new_food:
     mov  ah, [food_row]
     mov  al, [food_col]
     call cursor_to
-    mov  ah, 0x09
     mov  dx, food_seq
-    int  0x21
+    call print_str
     pop  dx
     pop  cx
     pop  bx
@@ -324,18 +319,17 @@ cursor_to:
     inc  al                      ; col+1
     push ax
     mov  dx, csi
-    mov  ah, 0x09
-    int  0x21
+    call print_str
     mov  al, cl
     xor  ah, ah
     call print_dec_word
-    mov  ah, 0x02
+    mov  ah, 0x06
     mov  dl, ';'
     int  0x21
     pop  ax
     xor  ah, ah
     call print_dec_word
-    mov  ah, 0x02
+    mov  ah, 0x06
     mov  dl, 'H'
     int  0x21
     pop  dx
@@ -362,12 +356,38 @@ print_dec_word:
 .out:
     pop  dx
     add  dl, '0'
-    mov  ah, 0x02
+    mov  ah, 0x06
     int  0x21
     loop .out
     pop  dx
     pop  cx
     pop  bx
+    pop  ax
+    ret
+
+; -------------------------------------------------------------------
+; print_str — print '$'-terminated string at DS:DX, byte-by-byte via
+; AH=06h (RAWOUT). Equivalent of AH=09h PRTBUF but bypasses the
+; kernel's STATCHK→INCHK snoop, which would otherwise eat keystrokes
+; the player meant for poll_key during every frame's render burst.
+; That's exactly the bug that made WASD silently fail. Preserves all
+; registers except FLAGS.
+print_str:
+    push ax
+    push dx
+    push si
+    mov  si, dx
+.loop:
+    mov  dl, [si]
+    cmp  dl, '$'
+    je   .done
+    mov  ah, 0x06
+    int  0x21
+    inc  si
+    jmp  .loop
+.done:
+    pop  si
+    pop  dx
     pop  ax
     ret
 
