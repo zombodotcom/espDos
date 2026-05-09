@@ -12,6 +12,7 @@
 
 #include "esp_log.h"
 #include "esp_partition.h"
+#include "esp_rom_sys.h"           /* esp_rom_output_to_channels */
 #include "driver/usb_serial_jtag.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -187,30 +188,22 @@ static void bios_out_flush(void) {
 #endif
 
 static void bios_out(uint8_t ch) {
-    /* Write to JTAG. usb_serial_jtag_is_connected() is unreliable on
-     * the C5, so we always retry on a full first attempt. */
-    if (usb_serial_jtag_write_bytes(&ch, 1, 0) == 0) {
-        usb_serial_jtag_write_bytes(&ch, 1, pdMS_TO_TICKS(2));
-    }
-    /* Force the driver task to actually push to the host every N
-     * bytes. Without this, the driver buffers indefinitely while
-     * the emulator hogs CPU — matrix produces ~600 KB of output but
-     * the user sees nothing for ~10 s, then the whole rendering
-     * appears at once when matrix exits and the kernel finally
-     * yields. ESP_LOGI didn't have this symptom because each log
-     * line goes through the blocking VFS-to-JTAG path which waits
-     * for the TX FIFO to drain — that's why my earlier diagnostic
-     * counter accidentally fixed the visual bug.
+    /* esp_rom_output_to_channels is what ESP-IDF uses to drive the
+     * console at the lowest level — it bypasses stdio buffering and
+     * the driver task and writes per-byte, blocking only as long as
+     * the TX FIFO needs to drain (microseconds on real hardware).
+     * That's the path ESP_LOG ends up on too, which is why the
+     * earlier diagnostic counter "accidentally fixed" matrix.
      *
-     * 64 bytes ≈ one USB CDC packet, so we yield once per packet.
-     * On hardware the wait is microseconds; the cost is invisible.
-     * In QEMU there's no host so wait_tx_done with a 0-ms cap
-     * returns immediately without sleeping. */
-    static unsigned since_flush;
-    if (++since_flush >= 64) {
-        since_flush = 0;
-        usb_serial_jtag_wait_tx_done(0);
-    }
+     * Why the previous attempts failed:
+     *   - usb_serial_jtag_write_bytes only QUEUES bytes; the driver
+     *     task transmits them whenever it gets CPU. With matrix's
+     *     emulator hogging CPU, the driver task barely ran and bytes
+     *     piled up until the emulator exited.
+     *   - wait_tx_done(0) with 0-tick timeout is a no-op; it
+     *     returns ESP_ERR_TIMEOUT immediately if the FIFO isn't
+     *     already empty, without nudging the driver task. */
+    esp_rom_output_to_channels(ch);
     /* Mirror to the LCD on targets that have one. The call is an
      * inline no-op when CONFIG_ESPDOS_HAS_DISPLAY=n. */
     display_putc(ch);
